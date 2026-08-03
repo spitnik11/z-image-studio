@@ -36,6 +36,11 @@ export function trainingProfile(model: string) {
   if (architecture === "krea2") {
     return { architecture, textEncoder: "qwen3vl_4b_fp8_scaled.safetensors", vae: "qwen_image_vae.safetensors", clipType: "krea2" };
   }
+  if (architecture === "illustrious") {
+    // SDXL: model, VAE, and both text encoders all live in the single checkpoint, so training
+    // (kohya sd-scripts) loads them from --pretrained_model_name_or_path — no separate TE/VAE.
+    return { architecture, textEncoder: "checkpoint", vae: "checkpoint", clipType: "sdxl" };
+  }
   throw new Error("This model architecture cannot be trained in Z-Image Studio.");
 }
 

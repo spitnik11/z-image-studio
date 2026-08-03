@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { getTrainingPaths, trainingCommands, trainingPreview, writeDatasetConfig } from "./musubi-training.js";
+import { getTrainingPaths, missingTrainingFiles, trainingCommands, trainingPreview, writeDatasetConfig, writeSdScriptsDatasetConfig } from "./musubi-training.js";
 
 describe("Musubi Z-Image training", () => {
   it("writes a batch-one bucketed image dataset", () => {
@@ -61,6 +61,35 @@ describe("Musubi Z-Image training", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "zimage-repeats-"));
     const config = writeDatasetConfig(directory, path.join(directory, "pictures"), 512, 3);
     expect(fs.readFileSync(config, "utf8")).toContain("num_repeats = 3");
+  });
+  it("builds an SDXL/Illustrious training command via kohya sd-scripts", () => {
+    const paths = getTrainingPaths("Z:\\studio");
+    const commands = trainingCommands(paths, {
+      name: "Ill Test", trigger: "iperson", model: "illustriousXL_v10.safetensors",
+      resolution: 768, steps: 400, rank: 16 as const, learningRate: 0.0001, gradAccumulation: 2, seed: 42, lrScheduler: "cosine" as const
+    }, "Z:\\studio\\job", "Z:\\studio\\job\\dataset.toml", "ill-test");
+    expect(commands).toHaveLength(1);
+    expect(commands[0].command).toBe(paths.sdScriptsAccelerate);
+    const args = commands[0].args;
+    expect(args.some(a => a.endsWith("sdxl_train_network.py"))).toBe(true);
+    expect(args.slice(args.indexOf("--pretrained_model_name_or_path"), args.indexOf("--pretrained_model_name_or_path") + 2))
+      .toEqual(["--pretrained_model_name_or_path", path.join(paths.checkpointsDir, "illustriousXL_v10.safetensors")]);
+    expect(args).toContain("--network_train_unet_only");
+    expect(args).toContain("--sdpa");
+    expect(args).not.toContain("--blocks_to_swap");
+    expect(args.slice(args.indexOf("--lr_scheduler"), args.indexOf("--lr_scheduler") + 2)).toEqual(["--lr_scheduler", "cosine"]);
+  });
+  it("writes an sd-scripts dataset config with subsets and repeats", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sdxl-ds-"));
+    const config = writeSdScriptsDatasetConfig(directory, path.join(directory, "pics"), 768, 2);
+    const text = fs.readFileSync(config, "utf8");
+    expect(text).toContain("resolution = 768");
+    expect(text).toContain("[[datasets.subsets]]");
+    expect(text).toContain("num_repeats = 2");
+  });
+  it("gates Illustrious training on the sd-scripts toolchain", () => {
+    const missing = missingTrainingFiles(getTrainingPaths("Z:\\does-not-exist"), "illustrious");
+    expect(missing.some(f => f.endsWith("sdxl_train_network.py"))).toBe(true);
   });
   it("previews architecture, disk budget, and all local command phases", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "zimage-preview-"));

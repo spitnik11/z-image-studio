@@ -29,7 +29,7 @@ import {
 } from "./workflow.js";
 import { buildVideoWorkflow, SCAIL_FILES, SCAIL_NODES, videoGenerationSchema } from "./video.js";
 import { trainingProfile, trainingSchema } from "./training.js";
-import { getTrainingPaths, missingTrainingFiles, runTrainingProcess, trainingCommands, trainingPreview, writeDatasetConfig } from "./musubi-training.js";
+import { getTrainingPaths, missingTrainingFiles, runTrainingProcess, trainingCommands, trainingPreview, writeDatasetConfig, writeSdScriptsDatasetConfig } from "./musubi-training.js";
 import { datasetCaptionForPrompt, datasetExtensionSchema, datasetPrompts, datasetSchema } from "./dataset.js";
 import { analyzeReview, exportReviewedDataset, loadReview, removeReviewItem, saveReview, updateReviewItem } from "./dataset-review.js";
 import { buildModelManifest, detectReferenceCapabilities, detectUpscaleCatalog } from "./diagnostics.js";
@@ -574,8 +574,14 @@ app.post("/api/training", trainingUpload.array("images", 100), async (q, r) => {
     const info: any = await comfy().objectInfo();
     const missingFiles = missingTrainingFiles(trainingPaths, profile.architecture);
     if (missingFiles.length) throw new Error(`The local LoRA engine is incomplete: ${missingFiles.map(file => path.relative(root, file)).join(", ")}`);
-    const models: string[] = info.UNETLoader?.input?.required?.unet_name?.[0] || [];
-    if (!models.includes(config.model)) throw new Error(`Training model is not available: ${config.model}`);
+    if (profile.architecture === "illustrious") {
+      // Illustrious/SDXL checkpoints load via CheckpointLoaderSimple, not UNETLoader.
+      const ckpts: string[] = info.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0] || [];
+      if (!ckpts.includes(config.model)) throw new Error(`Training checkpoint is not available: ${config.model}`);
+    } else {
+      const models: string[] = info.UNETLoader?.input?.required?.unet_name?.[0] || [];
+      if (!models.includes(config.model)) throw new Error(`Training model is not available: ${config.model}`);
+    }
     const id = crypto.randomUUID();
     const slug = config.name.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
     const installedPath = resolveInside(path.join(root, "lora"), `${slug}.safetensors`);
@@ -591,12 +597,14 @@ app.post("/api/training", trainingUpload.array("images", 100), async (q, r) => {
     const datasetFolder = `lora-training/${id}`;
     const jobDirectory = resolveInside(trainingJobsRoot, id);
     fs.mkdirSync(jobDirectory, { recursive: true });
-    const datasetConfig = writeDatasetConfig(jobDirectory, datasetDirectory, config.resolution, config.repeats);
+    const datasetConfig = profile.architecture === "illustrious"
+      ? writeSdScriptsDatasetConfig(jobDirectory, datasetDirectory, config.resolution, config.repeats)
+      : writeDatasetConfig(jobDirectory, datasetDirectory, config.resolution, config.repeats);
     const record = {
       id, promptId: "", status: "pending", progress: 0, phase: "Waiting to start",
       createdAt: new Date().toISOString(), started: Date.now(), imageCount: files.length,
       datasetFolder, jobDirectory, installedName: `${slug}.safetensors`,
-      trainingBase: profile.architecture === "krea2" ? "Krea 2 Raw" : "Z-Image Base BF16", ...config
+      trainingBase: profile.architecture === "krea2" ? "Krea 2 Raw" : profile.architecture === "illustrious" ? "SDXL checkpoint" : "Z-Image Base BF16", ...config
     };
     trainingRecords.unshift(record); persistTraining();
     void runMusubiTraining(record, config, datasetConfig, slug, installedPath);
@@ -1475,7 +1483,7 @@ async function runMusubiTraining(record: any, config: any, datasetConfig: string
       filename: path.basename(installedPath),
       architecture: adapter.architecture,
       baseTrainingModel: adapter.trainingBase,
-      trainer: "Musubi Tuner",
+      trainer: adapter.architecture === "illustrious" ? "kohya sd-scripts" : "Musubi Tuner",
       triggerToken: config.trigger,
       datasetId: config.datasetId,
       datasetVersion: config.datasetVersion,

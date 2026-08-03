@@ -39,7 +39,7 @@ export const modelAdapters: Record<ImageArchitecture, ModelAdapter> = {
     architecture: "illustrious",
     matches: filename => modelArchitecture(filename) === "illustrious",
     defaults: { steps: 28, guidance: 4, sampler: "dpmpp_sde", scheduler: "karras" },
-    trainable: false,
+    trainingBase: "SDXL checkpoint", trainable: true,
     loaderKind: "checkpoint",
     referenceModes: ["pose", "direct", "face"]
   },

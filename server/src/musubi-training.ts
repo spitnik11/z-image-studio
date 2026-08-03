@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import type { TrainingInput } from "./training.js";
+import { modelArchitecture } from "./workflow.js";
+
+export type TrainingArchitecture = "z-image" | "krea2" | "illustrious";
 
 export type TrainingPaths = {
   root: string;
@@ -14,6 +17,11 @@ export type TrainingPaths = {
   kreaVae: string;
   textEncoder: string;
   kreaTextEncoder: string;
+  // kohya sd-scripts (SDXL / Illustrious) — isolated venv so it can't disturb Musubi's torch.
+  sdScripts: string;
+  sdScriptsPython: string;
+  sdScriptsAccelerate: string;
+  checkpointsDir: string;
 };
 
 export function getTrainingPaths(root: string): TrainingPaths {
@@ -30,11 +38,24 @@ export function getTrainingPaths(root: string): TrainingPaths {
     textEncoder: path.join(root, "qwen3_4b.safetensors"),
     // Musubi requires the BF16/standard key layout; ComfyUI's scaled-FP8 file
     // contains comfy_quant tensors and remains generation-only.
-    kreaTextEncoder: path.join(root, "training-models", "qwen3vl_4b_bf16.safetensors")
+    kreaTextEncoder: path.join(root, "training-models", "qwen3vl_4b_bf16.safetensors"),
+    sdScripts: path.join(root, "training-engine", "sd-scripts"),
+    sdScriptsPython: path.join(root, "training-engine", "sd-scripts", ".venv", "Scripts", "python.exe"),
+    sdScriptsAccelerate: path.join(root, "training-engine", "sd-scripts", ".venv", "Scripts", "accelerate.exe"),
+    checkpointsDir: path.join(root, "checkpoints")
   };
 }
 
-export function missingTrainingFiles(paths: TrainingPaths, architecture: "z-image" | "krea2" = "z-image") {
+export function missingTrainingFiles(paths: TrainingPaths, architecture: TrainingArchitecture = "z-image") {
+  if (architecture === "illustrious") {
+    // SDXL trains via kohya sd-scripts in its own venv; the base is the user-chosen checkpoint
+    // (availability is checked against ComfyUI's checkpoint list at the route, not here).
+    return [
+      paths.sdScriptsPython,
+      paths.sdScriptsAccelerate,
+      path.join(paths.sdScripts, "sdxl_train_network.py")
+    ].filter(file => !fs.existsSync(file));
+  }
   const prefix = architecture === "krea2" ? "krea2" : "zimage";
   const files = [
     paths.python, paths.accelerate,
@@ -71,11 +92,34 @@ export function writeDatasetConfig(jobDirectory: string, imageDirectory: string,
   return configPath;
 }
 
+// kohya sd-scripts dataset config (SDXL). Different schema from Musubi's: images live in a
+// [[datasets.subsets]] with num_repeats, and resolution is a single int.
+export function writeSdScriptsDatasetConfig(jobDirectory: string, imageDirectory: string, resolution: number, repeats = 1) {
+  const normalize = (value: string) => value.replace(/\\/g, "/").replace(/"/g, '\\"');
+  const configPath = path.join(jobDirectory, "dataset.toml");
+  fs.writeFileSync(configPath, [
+    "[general]",
+    `resolution = ${resolution}`,
+    'caption_extension = ".txt"',
+    "enable_bucket = true",
+    "",
+    "[[datasets]]",
+    "batch_size = 1",
+    "",
+    "[[datasets.subsets]]",
+    `image_dir = "${normalize(imageDirectory)}"`,
+    `num_repeats = ${Math.max(1, Math.floor(repeats))}`,
+    ""
+  ].join("\n"), "utf8");
+  return configPath;
+}
+
 export function trainingCommands(paths: TrainingPaths, config: TrainingInput, jobDirectory: string, datasetConfig: string, slug: string) {
   const source = path.join(paths.musubi, "src", "musubi_tuner");
   const output = path.join(jobDirectory, "output");
   fs.mkdirSync(output, { recursive: true });
-  const krea = /krea[\s_.-]*2/i.test(config.model);
+  const architecture = modelArchitecture(config.model);
+  const krea = architecture === "krea2";
   // Tuning knobs — undefined reproduces the previous hardcoded values exactly.
   const optimizer = config.optimizer ?? "adamw8bit";
   const alpha = String(config.alpha ?? config.rank);
@@ -83,6 +127,30 @@ export function trainingCommands(paths: TrainingPaths, config: TrainingInput, jo
   const schedulerArgs = config.lrScheduler && config.lrScheduler !== "constant"
     ? ["--lr_scheduler", config.lrScheduler, "--lr_warmup_steps", String(Math.max(1, Math.ceil(config.steps * 0.05)))]
     : [];
+  if (architecture === "illustrious") {
+    // SDXL LoRA via kohya sd-scripts (isolated venv). Base = the user's checkpoint; SDXL loads its
+    // own VAE/CLIP, so no separate TE/VAE. UNet-only + cached latents keep it viable on 12 GB.
+    const checkpoint = path.join(paths.checkpointsDir, config.model);
+    return [
+      {
+        phase: "Training SDXL LoRA", progress: 12, command: paths.sdScriptsAccelerate,
+        args: [
+          "launch", "--num_cpu_threads_per_process", "1", "--mixed_precision", "bf16",
+          path.join(paths.sdScripts, "sdxl_train_network.py"),
+          "--pretrained_model_name_or_path", checkpoint,
+          "--dataset_config", datasetConfig,
+          "--network_module", "networks.lora",
+          "--network_dim", String(config.rank), "--network_alpha", alpha,
+          "--optimizer_type", optimizer, "--learning_rate", String(config.learningRate), ...schedulerArgs,
+          "--max_train_steps", String(config.steps), "--gradient_accumulation_steps", String(config.gradAccumulation),
+          "--mixed_precision", "bf16", "--sdpa", "--cache_latents", "--cache_latents_to_disk",
+          "--gradient_checkpointing", "--network_train_unet_only", "--no_half_vae",
+          "--save_model_as", "safetensors", "--seed", String(config.seed),
+          "--output_dir", output, "--output_name", `${slug}-lora`
+        ]
+      }
+    ];
+  }
   if (krea) return [
     {
       phase: "Encoding pictures", progress: 8, command: paths.python,
