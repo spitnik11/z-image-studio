@@ -55,6 +55,7 @@ import { generatePrompt, PromptLibraryStore, validatePromptRequest } from "./pro
 import { CharacterPresetStore, presetDatasetHandoff, presetGenerationInput } from "./character-presets.js";
 import {
   assertLibraryExtension,
+  classifyLibraryModel,
   installLibraryFile,
   LIBRARY_MAX_FILE_BYTES,
   LibraryUploadError,
@@ -458,7 +459,7 @@ app.post("/api/library/upload", (q, r) => {
             });
           }
         }
-        uploaded.push({ filename: target.filename, kind: target.kind, bytes: file.size });
+        uploaded.push({ filename: target.filename, kind: target.kind, bytes: file.size, ...classifyLibraryModel(target.filename) });
       }
       const kind = uploaded[0]?.kind;
       let models: Awaited<ReturnType<typeof discoverModels>> | undefined;

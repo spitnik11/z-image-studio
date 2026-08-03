@@ -1,6 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import { safeOutputPath } from "./workflow.js";
+import { modelArchitecture, safeOutputPath } from "./workflow.js";
+import { modelAdapters, type ImageArchitecture } from "./model-adapters.js";
+
+/**
+ * Classify an uploaded model by filename and report whether the local trainer supports it.
+ * Retroactive by construction: any model added later is classified the same way, so the UI can
+ * always show its architecture and whether a LoRA can be trained for it.
+ */
+export function classifyLibraryModel(filename: string): { architecture: ImageArchitecture | "unknown"; trainable: boolean } {
+  const architecture = modelArchitecture(filename) as ImageArchitecture | "unknown";
+  return { architecture, trainable: architecture !== "unknown" && !!modelAdapters[architecture]?.trainable };
+}
 
 /** Upload kinds accepted by POST /api/library/upload. */
 export type LibraryKind = "lora" | "diffusion" | "checkpoint";

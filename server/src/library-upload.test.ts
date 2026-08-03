@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  classifyLibraryModel,
   installLibraryFile,
   libraryDestinationDir,
   resolveLibraryTarget,
@@ -11,6 +12,15 @@ import {
   LibraryUploadError,
   LIBRARY_MAX_FILE_BYTES
 } from "./library-upload.js";
+
+describe("classifyLibraryModel", () => {
+  it("classifies models by filename and reports trainer support", () => {
+    expect(classifyLibraryModel("zImageTurbo_turbo.safetensors")).toEqual({ architecture: "z-image", trainable: true });
+    expect(classifyLibraryModel("krea2Turbo.safetensors")).toEqual({ architecture: "krea2", trainable: true });
+    expect(classifyLibraryModel("illustriousXL_v10.safetensors")).toEqual({ architecture: "illustrious", trainable: false });
+    expect(classifyLibraryModel("something-random.safetensors").architecture).toBe("unknown");
+  });
+});
 
 const temps: string[] = [];
 
