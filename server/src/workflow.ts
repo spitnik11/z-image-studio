@@ -15,7 +15,7 @@ export const generationSchema = z.object({
   outputFormat: z.enum(["png", "webp"]).default("png"),
   sampler: z.enum(["res_multistep", "euler", "euler_ancestral", "dpmpp_2m", "dpmpp_sde"]).default("res_multistep"),
   scheduler: z.enum(["simple", "karras", "sgm_uniform"]).default("simple"),
-  outputName: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/).default("z-image"),
+  outputName: z.string().regex(/^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/).max(128).default("z-image"),
   neuralUpscale: z.boolean().default(false),
   upscaleModel: z.string().max(260).refine(v => !path.isAbsolute(v) && !v.includes(".."), "Invalid upscale model").default("RealESRGAN_x4plus.pth"),
   /** Opt-in Impact Pack face detect + low-denoise polish after decode (all Photo architectures). */

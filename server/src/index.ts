@@ -75,6 +75,12 @@ const datasetRecordsFile = path.join(root, "data/dataset-jobs.json");
 const modelCatalogFile = path.join(root, "data/model-catalog.json");
 const settingsFile = path.join(root, "data/settings.json");
 const datasetsRoot = path.join(root, "data/datasets");
+// Group each dataset's raw ComfyUI generations under output/datasets/<slug>/ instead of dumping
+// them flat in the output root. Slug is human-readable (name/trigger) + short id for uniqueness.
+const datasetOutputSlug = (label: string | undefined, id: string) =>
+  `${(label || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "dataset"}-${id.slice(0, 8)}`;
+const datasetOutputName = (slug: string, oneBasedIndex: number) =>
+  `datasets/${slug}/${String(oneBasedIndex).padStart(3, "0")}`;
 const loraRegistry = new LoraRegistry(path.join(root, "data/lora-registry.json"), path.join(root, "lora"));
 const characterProfiles = new CharacterProfileStore(path.join(root, "data/character-profiles.json"));
 const promptLibrary = new PromptLibraryStore(path.join(root, "data/prompt-library.json"));
@@ -93,6 +99,7 @@ const defaultSettings = {
   diffusionModel: "zImageTurbo_turbo.safetensors",
   textEncoder: "qwen3_4b.safetensors",
   vae: "flux1AE_v10.safetensors",
+  pruneRawDatasetOutputs: false,
   generationDefaults: {
     width: 1024, height: 1024, steps: 8, guidance: 1, batchSize: 1,
     outputFormat: "png" as const, sampler: "res_multistep" as const, scheduler: "simple" as const
@@ -114,6 +121,7 @@ const settingsSchema = z.object({
   diffusionModel: z.string().min(1).max(300),
   textEncoder: z.string().min(1).max(300),
   vae: z.string().min(1).max(300),
+  pruneRawDatasetOutputs: z.boolean().default(false),
   generationDefaults: generationDefaultsSchema
 });
 let settings = settingsSchema.parse({
@@ -740,6 +748,8 @@ app.post("/api/datasets/:id/extend", async (q, r) => {
       characterAdjustments
     });
     const clientId = crypto.randomUUID();
+    const outputSlug = record.outputSlug || datasetOutputSlug(record.name || record.trigger, record.id);
+    record.outputSlug = outputSlug;
     const nextPromptIds: string[] = [];
     for (const item of prompts) {
       const globalIndex = currentGenerated + item.index;
@@ -749,7 +759,7 @@ app.post("/api/datasets/:id/extend", async (q, r) => {
         width: record.width, height: record.height, seed: item.seed,
         steps: architecture === "krea2" ? 8 : 9, guidance: 1, batchSize: 1,
         priority: "low", outputFormat: "png", sampler: "res_multistep", scheduler: "simple",
-        outputName: `dataset-${record.id}-${String(globalIndex + 1).padStart(3, "0")}`,
+        outputName: datasetOutputName(outputSlug, globalIndex + 1),
         diffusionModel: record.model, textEncoder: profile.textEncoder, vae: profile.vae,
         loras: [], references: [{ image: record.referenceImage, mode: "direct", strength: architecture === "krea2" ? 1.15 : 0.8 }]
       });
@@ -891,6 +901,7 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
     const prompts = datasetPrompts(config);
     const referenceImage = file ? `z-image-studio/${file.filename}` : profileReference;
     const clientId = crypto.randomUUID();
+    const outputSlug = datasetOutputSlug(config.name || config.trigger, id);
     const promptIds: string[] = [];
     for (const item of prompts) {
       const input = generationSchema.parse({
@@ -898,7 +909,7 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
         width: config.width, height: config.height, seed: item.seed,
         steps: architecture === "krea2" ? 8 : 9, guidance: 1, batchSize: 1,
         priority: "low", outputFormat: "png", sampler: "res_multistep", scheduler: "simple",
-        outputName: `dataset-${id}-${String(item.index + 1).padStart(3, "0")}`,
+        outputName: datasetOutputName(outputSlug, item.index + 1),
         diffusionModel: config.model, textEncoder: profile.textEncoder, vae: profile.vae,
         loras: [], references: [{ image: referenceImage, mode: "direct", strength: architecture === "krea2" ? 1.15 : 0.8 }]
       });
@@ -913,7 +924,8 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
       images: [], captions: prompts.map(item => item.caption), captionByImage: {},
       promptPlan: prompts,
       architecture, warning: architecture === "z-image" ? "Z-Image uses structural guidance; Krea 2 Identity mode gives stronger one-image identity retention." : "",
-      ...config
+      ...config,
+      outputSlug
     };
     datasetRecords.unshift(record);
     persistDatasets();
@@ -1533,6 +1545,8 @@ function monitorDataset(record: any) {
         fs.mkdirSync(imageDirectory, { recursive: true });
         const target = resolveInside(imageDirectory, name);
         if (!fs.existsSync(target)) fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+        // Opt-in cleanup of the raw ComfyUI output once it's safely copied into the dataset folder.
+        if (settings.pruneRawDatasetOutputs) try { fs.unlinkSync(source); } catch {}
         const caption = datasetCaptionForPrompt(record, index);
         fs.writeFileSync(resolveInside(imageDirectory, `${String(index + 1).padStart(3, "0")}.txt`), caption, "utf8");
         if (!record.images.includes(name)) record.images.push(name);

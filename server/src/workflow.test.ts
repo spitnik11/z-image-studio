@@ -17,6 +17,13 @@ describe("workflow inputs", () => {
     expect(generationSchema.parse({...valid,seed:0}).seed).toBe(0);
     expect(generationSchema.parse({...valid,seed:Number.MAX_SAFE_INTEGER}).seed).toBe(Number.MAX_SAFE_INTEGER);
   });
+  it("outputName allows safe subfolders but blocks path traversal", () => {
+    expect(generationSchema.parse({...valid,outputName:"datasets/emily-a1b2c3d4/001"}).outputName).toBe("datasets/emily-a1b2c3d4/001");
+    expect(generationSchema.parse({...valid,outputName:"z-image"}).outputName).toBe("z-image");
+    for (const bad of ["../evil", "/abs/path", "a/../b", "a\\b", "datasets//001", "trailing/"]) {
+      expect(() => generationSchema.parse({...valid, outputName: bad})).toThrow();
+    }
+  });
   it("chains multiple model-only LoRAs before model sampling", () => {
     const w = buildWorkflow(template, {...valid,loras:[{name:"flat.safetensors",strength:.7},{name:"nice.safetensors",strength:1.1}]});
     expect(w["20"].class_type).toBe("LoraLoaderModelOnly");
