@@ -11,6 +11,13 @@ export const trainingSchema = z.object({
   rank: z.union([z.literal(8), z.literal(16), z.literal(32), z.literal(64)]).default(16),
   learningRate: z.number().min(0.000001).max(0.001).default(0.0001),
   gradAccumulation: z.number().int().min(1).max(16).default(4),
+  // Optional tuning knobs. Left undefined they reproduce the previous hardcoded behavior
+  // (alpha=rank, block swap 28 z-image / 26 krea, adamw8bit, constant LR, 1 repeat).
+  alpha: z.number().int().min(1).max(128).optional(),
+  blocksToSwap: z.number().int().min(0).max(40).optional(),
+  optimizer: z.enum(["adamw8bit", "adamw"]).optional(),
+  lrScheduler: z.enum(["constant", "cosine", "cosine_with_restarts"]).optional(),
+  repeats: z.number().int().min(1).max(20).optional(),
   seed: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(42)
 });
 

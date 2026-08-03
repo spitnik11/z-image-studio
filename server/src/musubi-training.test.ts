@@ -42,6 +42,26 @@ describe("Musubi Z-Image training", () => {
     expect(commands[2].args).toContain("networks.lora_krea2");
     expect(commands[2].args.slice(commands[2].args.indexOf("--blocks_to_swap"), commands[2].args.indexOf("--blocks_to_swap") + 2)).toEqual(["--blocks_to_swap", "26"]);
   });
+  it("threads tuning knobs and reproduces the old args when they are unset", () => {
+    const paths = getTrainingPaths("Z:\\studio");
+    const base = { name: "Test", trigger: "zperson", model: "zImageTurbo_turbo.safetensors", resolution: 512, steps: 400, rank: 16 as const, learningRate: 0.0001, gradAccumulation: 2, seed: 42 };
+    const d = trainingCommands(paths, base, "Z:\\studio\\job", "Z:\\studio\\job\\dataset.toml", "t")[2].args;
+    expect(d).not.toContain("--lr_scheduler");
+    expect(d.slice(d.indexOf("--network_alpha"), d.indexOf("--network_alpha") + 2)).toEqual(["--network_alpha", "16"]);
+    expect(d.slice(d.indexOf("--optimizer_type"), d.indexOf("--optimizer_type") + 2)).toEqual(["--optimizer_type", "adamw8bit"]);
+    expect(d.slice(d.indexOf("--blocks_to_swap"), d.indexOf("--blocks_to_swap") + 2)).toEqual(["--blocks_to_swap", "28"]);
+    const t = trainingCommands(paths, { ...base, lrScheduler: "cosine" as const, alpha: 8, blocksToSwap: 20, optimizer: "adamw" as const }, "Z:\\studio\\job", "Z:\\studio\\job\\dataset.toml", "t")[2].args;
+    expect(t.slice(t.indexOf("--lr_scheduler"), t.indexOf("--lr_scheduler") + 2)).toEqual(["--lr_scheduler", "cosine"]);
+    expect(t).toContain("--lr_warmup_steps");
+    expect(t.slice(t.indexOf("--network_alpha"), t.indexOf("--network_alpha") + 2)).toEqual(["--network_alpha", "8"]);
+    expect(t.slice(t.indexOf("--blocks_to_swap"), t.indexOf("--blocks_to_swap") + 2)).toEqual(["--blocks_to_swap", "20"]);
+    expect(t.slice(t.indexOf("--optimizer_type"), t.indexOf("--optimizer_type") + 2)).toEqual(["--optimizer_type", "adamw"]);
+  });
+  it("writes configurable dataset repeats", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "zimage-repeats-"));
+    const config = writeDatasetConfig(directory, path.join(directory, "pictures"), 512, 3);
+    expect(fs.readFileSync(config, "utf8")).toContain("num_repeats = 3");
+  });
   it("previews architecture, disk budget, and all local command phases", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "zimage-preview-"));
     const preview = trainingPreview(getTrainingPaths(root), {

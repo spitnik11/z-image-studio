@@ -590,7 +590,7 @@ app.post("/api/training", trainingUpload.array("images", 100), async (q, r) => {
     const datasetFolder = `lora-training/${id}`;
     const jobDirectory = resolveInside(trainingJobsRoot, id);
     fs.mkdirSync(jobDirectory, { recursive: true });
-    const datasetConfig = writeDatasetConfig(jobDirectory, datasetDirectory, config.resolution);
+    const datasetConfig = writeDatasetConfig(jobDirectory, datasetDirectory, config.resolution, config.repeats);
     const record = {
       id, promptId: "", status: "pending", progress: 0, phase: "Waiting to start",
       createdAt: new Date().toISOString(), started: Date.now(), imageCount: files.length,

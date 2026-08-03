@@ -33,9 +33,9 @@ type TrainingPreview = {
 };
 
 const presets = {
-  quick: { label: "Quick test", resolution: 512, steps: 250, rank: 8, description: "Confirm identity, captions, and the trigger with the lightest verified profile." },
-  balanced: { label: "Balanced", resolution: 512, steps: 500, rank: 16, description: "Recommended starting point for this 12 GB GPU." },
-  detailed: { label: "Detailed", resolution: 768, steps: 800, rank: 32, description: "Slower and more memory-intensive; best after Balanced succeeds." }
+  quick: { label: "POC / Quick", resolution: 512, steps: 200, rank: 8, gradAccumulation: 1, lrScheduler: "cosine", description: "Fastest — prove identity, captions, and the trigger work in minutes. Lower fidelity, ideal for a proof of concept." },
+  balanced: { label: "Balanced", resolution: 512, steps: 400, rank: 16, gradAccumulation: 2, lrScheduler: "cosine", description: "Recommended default: retuned for a better speed/quality balance on this 12 GB GPU (~2.5× fewer passes than before)." },
+  detailed: { label: "Detailed", resolution: 768, steps: 800, rank: 32, gradAccumulation: 4, lrScheduler: "cosine", description: "Highest quality; slowest and most memory-intensive. Use after Balanced succeeds." }
 } as const;
 
 function formatDuration(seconds: number | null | undefined) {
@@ -89,7 +89,7 @@ export function TrainingControls({ onUse, onExit, datasetId }: { onUse: (name: s
         method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal,
         body: JSON.stringify({ imageCount: pictures.length, config: {
           name, trigger, model, resolution: setting.resolution, steps: setting.steps,
-          rank: setting.rank, learningRate: 0.0001, gradAccumulation: 4, seed: 42
+          rank: setting.rank, learningRate: 0.0001, gradAccumulation: setting.gradAccumulation, lrScheduler: setting.lrScheduler, seed: 42
         } })
       });
       const payload = await response.json();
@@ -173,7 +173,7 @@ export function TrainingControls({ onUse, onExit, datasetId }: { onUse: (name: s
       const body = new FormData();
       body.append("config", JSON.stringify({
         name, trigger, model, resolution: setting.resolution, steps: setting.steps,
-        rank: setting.rank, learningRate: 0.0001, gradAccumulation: 4, seed: 42
+        rank: setting.rank, learningRate: 0.0001, gradAccumulation: setting.gradAccumulation, lrScheduler: setting.lrScheduler, seed: 42
       }));
       body.append("captions", JSON.stringify(pictures.map(picture => picture.caption || trigger)));
       pictures.forEach(picture => body.append("images", picture.file));

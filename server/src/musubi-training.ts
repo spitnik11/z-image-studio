@@ -49,7 +49,7 @@ export function missingTrainingFiles(paths: TrainingPaths, architecture: "z-imag
   return files.filter(file => !fs.existsSync(file));
 }
 
-export function writeDatasetConfig(jobDirectory: string, imageDirectory: string, resolution: number) {
+export function writeDatasetConfig(jobDirectory: string, imageDirectory: string, resolution: number, repeats = 1) {
   const normalize = (value: string) => value.replace(/\\/g, "/").replace(/"/g, '\\"');
   const cacheDirectory = path.join(jobDirectory, "cache");
   fs.mkdirSync(cacheDirectory, { recursive: true });
@@ -65,7 +65,7 @@ export function writeDatasetConfig(jobDirectory: string, imageDirectory: string,
     "[[datasets]]",
     `image_directory = "${normalize(imageDirectory)}"`,
     `cache_directory = "${normalize(cacheDirectory)}"`,
-    "num_repeats = 1",
+    `num_repeats = ${Math.max(1, Math.floor(repeats))}`,
     ""
   ].join("\n"), "utf8");
   return configPath;
@@ -76,6 +76,13 @@ export function trainingCommands(paths: TrainingPaths, config: TrainingInput, jo
   const output = path.join(jobDirectory, "output");
   fs.mkdirSync(output, { recursive: true });
   const krea = /krea[\s_.-]*2/i.test(config.model);
+  // Tuning knobs — undefined reproduces the previous hardcoded values exactly.
+  const optimizer = config.optimizer ?? "adamw8bit";
+  const alpha = String(config.alpha ?? config.rank);
+  const blocksToSwap = String(config.blocksToSwap ?? (krea ? 26 : 28));
+  const schedulerArgs = config.lrScheduler && config.lrScheduler !== "constant"
+    ? ["--lr_scheduler", config.lrScheduler, "--lr_warmup_steps", String(Math.max(1, Math.ceil(config.steps * 0.05)))]
+    : [];
   if (krea) return [
     {
       phase: "Encoding pictures", progress: 8, command: paths.python,
@@ -93,11 +100,11 @@ export function trainingCommands(paths: TrainingPaths, config: TrainingInput, jo
         "--dit", paths.kreaRawModel, "--vae", paths.kreaVae,
         "--dataset_config", datasetConfig, "--sdpa", "--mixed_precision", "bf16",
         "--timestep_sampling", "krea2_shift", "--weighting_scheme", "none",
-        "--optimizer_type", "adamw8bit", "--learning_rate", String(config.learningRate),
+        "--optimizer_type", optimizer, "--learning_rate", String(config.learningRate), ...schedulerArgs,
         "--gradient_checkpointing", "--gradient_checkpointing_cpu_offload",
-        "--blocks_to_swap", "26", "--fp8_base", "--fp8_scaled",
+        "--blocks_to_swap", blocksToSwap, "--fp8_base", "--fp8_scaled",
         "--max_data_loader_n_workers", "1", "--network_module", "networks.lora_krea2",
-        "--network_dim", String(config.rank), "--network_alpha", String(config.rank),
+        "--network_dim", String(config.rank), "--network_alpha", alpha,
         "--max_train_steps", String(config.steps), "--gradient_accumulation_steps", String(config.gradAccumulation),
         "--seed", String(config.seed), "--output_dir", output, "--output_name", `${slug}-musubi`
       ]
@@ -120,11 +127,11 @@ export function trainingCommands(paths: TrainingPaths, config: TrainingInput, jo
         "--dit", paths.baseModel, "--vae", paths.vae, "--text_encoder", paths.textEncoder,
         "--dataset_config", datasetConfig, "--sdpa", "--mixed_precision", "bf16",
         "--timestep_sampling", "shift", "--weighting_scheme", "none", "--discrete_flow_shift", "2.0",
-        "--optimizer_type", "adamw8bit", "--learning_rate", String(config.learningRate),
+        "--optimizer_type", optimizer, "--learning_rate", String(config.learningRate), ...schedulerArgs,
         "--gradient_checkpointing", "--gradient_checkpointing_cpu_offload",
-        "--blocks_to_swap", "28", "--fp8_base", "--fp8_scaled", "--fp8_llm",
+        "--blocks_to_swap", blocksToSwap, "--fp8_base", "--fp8_scaled", "--fp8_llm",
         "--max_data_loader_n_workers", "1", "--network_module", "networks.lora_zimage",
-        "--network_dim", String(config.rank), "--network_alpha", String(config.rank),
+        "--network_dim", String(config.rank), "--network_alpha", alpha,
         "--max_train_steps", String(config.steps), "--gradient_accumulation_steps", String(config.gradAccumulation),
         "--seed", String(config.seed), "--output_dir", output, "--output_name", `${slug}-musubi`
       ]
@@ -146,7 +153,7 @@ export function trainingPreview(paths: TrainingPaths, config: TrainingInput, ima
     targetModel: config.model,
     imageCount: safeCount,
     estimatedWorkingGb: Number(Math.max(1.5, (safeCount * config.resolution * config.resolution * 20) / 1024 ** 3 + (architecture === "krea2" ? 4.5 : 3)).toFixed(1)),
-    vramProfile: "12 GB conservative profile: batch 1, effective batch 4, gradient checkpointing, CPU activation offload, and block swapping.",
+    vramProfile: `12 GB conservative profile: batch 1, effective batch ${config.gradAccumulation}, gradient checkpointing, CPU activation offload, and block swap ${config.blocksToSwap ?? (architecture === "krea2" ? 26 : 28)}.`,
     recommendedStrength: 1,
     config,
     commands
