@@ -1,0 +1,12 @@
+import fs from "node:fs"; import path from "node:path"; import {fileURLToPath} from "node:url";
+import {promptLibrarySchema} from "./prompt-engine.js"; import {writeJsonAtomic} from "./file-utils.js";
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"../..");
+const vault=path.join(process.env.USERPROFILE||"C:\\Users\\losth","Documents","ClaudeBrain","02 Projects","Z-Image Studio","Prompt Library");
+const files=["README.md","WRESTLING-ACTION-LIBRARY.md","CHARACTER-MODEL-LIBRARY.md","NEGATIVE-PROMPT-LIBRARY.md","LORA-PROMPT-MAP.md"];
+for(const file of files)if(!fs.existsSync(path.join(vault,file)))throw new Error(`Vault prompt source is missing: ${file}`);
+const target=path.join(root,"data","prompt-library.json");
+const library=promptLibrarySchema.parse(JSON.parse(fs.readFileSync(target,"utf8")));
+const ids=library.entries.map(entry=>entry.id);
+if(new Set(ids).size!==ids.length)throw new Error("Prompt library contains duplicate IDs.");
+writeJsonAtomic(target,library);
+console.log(`Imported ${library.entries.length} prompt entries and ${library.negativePresets.length} negative presets from the curated vault contract.`);

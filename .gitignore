@@ -1,0 +1,50 @@
+# ── Model weights & checkpoints (NEVER commit — GitHub 100MB/file limit) ──
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.gguf
+*.onnx
+*.vae
+
+# Model / heavy asset directories
+ComfyUI/
+checkpoints/
+lora/
+training-models/
+training-engine/
+video-models/
+upscale_models/
+models/
+
+# ── Generated / runtime data ──────────────────────────────────
+node_modules/
+dist/
+build/
+outputs/
+logs/
+data/
+!data/.gitkeep
+
+# ── Secrets & credentials (NEVER commit) ──────────────────────
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa
+id_ed25519
+secrets.*
+credentials.*
+*.secret
+
+# ── OS / editor cruft ─────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

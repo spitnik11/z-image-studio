@@ -1,0 +1,10 @@
+{
+  "_note": "Reference API graph is built and validated by server/src/video.ts. Node IDs and values here document the native SCAIL-2 path; browser clients cannot submit arbitrary workflow JSON.",
+  "profile": "SCAIL-2 MXFP8 / native ComfyUI",
+  "nodes": [
+    "LoadImage", "LoadVideo", "GetVideoComponents", "ImageFromBatch", "ImageScale",
+    "UNETLoader", "CLIPLoader (wan)", "VAELoader", "CLIPVisionLoader",
+    "SAM3_VideoTrack", "SCAIL2ColoredMask", "WanSCAILToVideo",
+    "ModelSamplingSD3", "KSampler", "VAEDecode", "CreateVideo", "SaveVideo"
+  ]
+}

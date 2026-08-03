@@ -1,0 +1,19 @@
+{
+  "name": "z-image-studio",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["app", "server"],
+  "scripts": {
+    "dev": "concurrently -n app,server -c cyan,yellow \"npm run dev -w app\" \"npm run dev -w server\"",
+    "build": "npm run build -w app && npm run build -w server",
+    "start": "npm run start -w server",
+    "test": "npm run test -w server",
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:prompt": "node scripts/prompt-smoke.mjs",
+    "prune": "node scripts/prune-maintenance.mjs",
+    "import-prompt-library": "npm run import-prompt-library -w server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0"
+  }
+}
