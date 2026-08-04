@@ -1234,8 +1234,11 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
       vae: profile.vae,
       warning: [
         stack.matchedFromMaster
-          ? `Master model/stack info: ${stack.note}. Generation LoRAs = your edited list (${stackLoras.length}).`
-          : `Using selected model${stackLoras.length ? ` + ${stackLoras.length} LoRA(s) from the builder list` : " (no LoRAs in builder list)"}.`,
+          ? `Master model matched: ${String(resolvedModel).replace(/\.safetensors$/i, "")}.`
+          : `Using selected model ${String(resolvedModel).replace(/\.safetensors$/i, "")}.`,
+        stackLoras.length
+          ? `Applied LoRAs (builder list): ${stackLoras.map(l => `${String(l.name).replace(/\.safetensors$/i, "")}:${l.strength}`).join(", ")}.`
+          : "Applied LoRAs: none (builder list empty).",
         unmatchedNote,
         mismatchedLoras.length ? `LoRA architecture mismatch (applied anyway): ${mismatchedLoras.join(", ")} — model resolved as ${requiredFamily}. Re-verify in LoRA Manager if results look off.` : "",
         architecture === "z-image" ? "Z-Image uses structural guidance; Krea 2 Identity mode gives stronger one-image identity retention." : "",
@@ -1245,7 +1248,8 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
       negativePrompt: datasetNegative,
       outputSlug,
       stackNote: stack.note,
-      stackSources: stack.sources
+      stackSources: stack.sources,
+      appliedLoras: stackLoras
     };
     datasetRecords.unshift(record);
     persistDatasets();
@@ -1723,6 +1727,8 @@ function resolveMasterGenerationStack(options: {
     gallery = findGalleryStackByImageName(name);
     if (gallery?.model || gallery?.loras?.length) break;
   }
+  const formAuthoritative = options.formLorasAuthoritative === true;
+
   if (gallery?.model || gallery?.loras?.length) {
     if (gallery.model) {
       modelHint = gallery.model;
@@ -1730,7 +1736,8 @@ function resolveMasterGenerationStack(options: {
     }
     if (gallery.loras.length) {
       masterLoras = gallery.loras;
-      sources.push(`gallery LoRAs ×${gallery.loras.length}`);
+      // Only report master LoRA sources when they will actually seed the stack (inspect).
+      if (!formAuthoritative) sources.push(`gallery LoRAs ×${gallery.loras.length}`);
     }
   }
 
@@ -1748,13 +1755,12 @@ function resolveMasterGenerationStack(options: {
       // PNG LoRAs seed inspect when gallery didn't supply any.
       if (!masterLoras.length) {
         masterLoras = parsed.loras;
-        sources.push(`PNG LoRA tags ×${parsed.loras.length}`);
+        if (!formAuthoritative) sources.push(`PNG LoRA tags ×${parsed.loras.length}`);
       }
     }
   }
 
   // Form authoritative on create: user removals/strengths must not be re-injected from master.
-  const formAuthoritative = options.formLorasAuthoritative === true;
   const hintResult = resolveDatasetLoraHints({
     formLoras,
     masterLoras,

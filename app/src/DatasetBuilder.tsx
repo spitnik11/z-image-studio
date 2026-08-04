@@ -10,6 +10,7 @@ type DatasetJob = {
   datasetMode?: "standard" | "instagram-ugc";
   seed?: number;
   loras?: Array<{ name: string; strength: number }>;
+  appliedLoras?: Array<{ name: string; strength: number }>;
   stackMatchedFromMaster?: boolean;
   stackNote?: string;
 };
@@ -575,11 +576,15 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
       {jobs.map(job => <article key={job.id}>
         <div className="training-job-head"><strong>{job.name}</strong><span className={`training-state ${job.status}`}>{job.status}</span></div>
         <small>{job.datasetMode === "instagram-ugc" ? "Instagram UGC · " : ""}{job.status === "completed" ? `${job.images?.length || 0} images` : `${job.images?.length || 0}/${job.count} images`}{typeof job.seed === "number" ? ` · seed ${job.seed}` : ""} · {job.phase}</small>
-        {(job.model || job.loras?.length) && (
-          <small className="dataset-stack-line" title={job.stackNote || ""}>
+        {(job.model || job.loras?.length || job.appliedLoras?.length) && (
+          <small className="dataset-stack-line" title={(job.appliedLoras || job.loras || []).map(l => `${l.name}:${l.strength}`).join("\n") || job.stackNote || ""}>
             {(job.model || "").replace(/\.safetensors$/i, "") || "model?"}
-            {job.loras?.length ? ` · ${job.loras.length} LoRA${job.loras.length === 1 ? "" : "s"}` : " · no LoRAs"}
-            {job.stackMatchedFromMaster ? " · matched master" : ""}
+            {(() => {
+              const applied = job.appliedLoras || job.loras || [];
+              if (!applied.length) return " · no LoRAs";
+              const names = applied.map(l => `${String(l.name).replace(/\.safetensors$/i, "")}:${l.strength}`).join(", ");
+              return ` · ${applied.length} LoRA${applied.length === 1 ? "" : "s"}: ${names.length > 90 ? `${names.slice(0, 87)}…` : names}`;
+            })()}
           </small>
         )}
         {["pending", "active", "paused"].includes(job.status) && <div className="progress"><i style={{ width: `${Math.max(3, job.progress || 0)}%` }}/></div>}
