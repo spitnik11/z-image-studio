@@ -851,6 +851,7 @@ app.post("/api/datasets/:id/extend", async (q, r) => {
     if (!availableModels.includes(record.model)) throw new Error(`Image model is not available: ${record.model}`);
     const characterAdjustments = extension.characterAdjustments || record.characterAdjustments || { hair: "", body: "", other: "" };
     const stackLoras = Array.isArray(record.loras) ? record.loras : [];
+    requireDatasetMasterImage(String(record.referenceImage || ""));
     const prompts = datasetPrompts({
       ...record,
       datasetMode: record.datasetMode || "standard",
@@ -873,33 +874,41 @@ app.post("/api/datasets/:id/extend", async (q, r) => {
       record.datasetMode === "instagram-ugc" ? "instagram-ugc" : "standard",
       record.masterIdentityStrength
     );
-    for (const item of prompts) {
-      const globalIndex = currentGenerated + item.index;
-      let promptText = item.caption;
-      try { promptText = applyLoraActivations(promptText, stackLoras, registeredLoras); } catch { /* keep */ }
-      const input = generationSchema.parse({
-        prompt: promptText,
-        negativePrompt: extendNegative,
-        width: record.width, height: record.height, seed: item.seed,
-        steps: record.steps || (architecture === "krea2" ? 8 : architecture === "illustrious" ? 28 : 9),
-        guidance: record.guidance ?? (architecture === "illustrious" ? 4 : 1),
-        batchSize: 1,
-        priority: "low", outputFormat: "png",
-        sampler: record.sampler || (architecture === "illustrious" ? "dpmpp_sde" : "res_multistep"),
-        scheduler: record.scheduler || (architecture === "illustrious" ? "karras" : "simple"),
-        outputName: datasetOutputName(outputSlug, globalIndex + 1),
-        diffusionModel: record.model, textEncoder: profile.textEncoder, vae: profile.vae,
-        loras: stackLoras,
-        // Master Direct strength: stored masterIdentityStrength or mode default.
-        references: [{ image: record.referenceImage, mode: "direct", strength: identityStrength }]
-      });
-      const graph = architecture === "illustrious"
-        ? buildIllustriousWorkflow(input)
-        : architecture === "anima"
-          ? buildAnimaWorkflow(input)
-          : buildWorkflow(workflowTemplate, input);
-      const result = await comfy().submit(graph, clientId, "low") as { prompt_id: string };
-      nextPromptIds.push(result.prompt_id);
+    try {
+      for (const item of prompts) {
+        const globalIndex = currentGenerated + item.index;
+        let promptText = item.caption;
+        try { promptText = applyLoraActivations(promptText, stackLoras, registeredLoras); } catch { /* keep */ }
+        const input = generationSchema.parse({
+          prompt: promptText,
+          negativePrompt: extendNegative,
+          width: record.width, height: record.height, seed: item.seed,
+          steps: record.steps || (architecture === "krea2" ? 8 : architecture === "illustrious" ? 28 : 9),
+          guidance: record.guidance ?? (architecture === "illustrious" ? 4 : 1),
+          batchSize: 1,
+          priority: "low", outputFormat: "png",
+          sampler: record.sampler || (architecture === "illustrious" ? "dpmpp_sde" : "res_multistep"),
+          scheduler: record.scheduler || (architecture === "illustrious" ? "karras" : "simple"),
+          outputName: datasetOutputName(outputSlug, globalIndex + 1),
+          diffusionModel: record.model, textEncoder: profile.textEncoder, vae: profile.vae,
+          loras: stackLoras,
+          // Master Direct strength: stored masterIdentityStrength or mode default.
+          references: [{ image: record.referenceImage, mode: "direct", strength: identityStrength }]
+        });
+        const graph = architecture === "illustrious"
+          ? buildIllustriousWorkflow(input)
+          : architecture === "anima"
+            ? buildAnimaWorkflow(input)
+            : buildWorkflow(workflowTemplate, input);
+        const result = await comfy().submit(graph, clientId, "low") as { prompt_id: string };
+        nextPromptIds.push(result.prompt_id);
+      }
+    } catch (error) {
+      await cancelSubmittedDatasetPrompts(nextPromptIds);
+      throw new Error(
+        `Dataset extend queue failed after ${nextPromptIds.length}/${prompts.length} shots: ${simplify(error)}. ` +
+          `Re-check ComfyUI and that the master image still exists.`
+      );
     }
     const globalPrompts = prompts.map(item => ({ ...item, index: currentGenerated + item.index }));
     record.promptIds.push(...nextPromptIds);
@@ -1127,6 +1136,11 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
       throw new Error("Choose a master image, or select a character profile with a saved Studio reference image.");
     }
     const referenceImage = file ? `z-image-studio/${file.filename}` : profileReference;
+    // Must exist before we enqueue N Comfy jobs (missing master = mass LoadImage failures).
+    if (file && (!file.path || !fs.existsSync(file.path))) {
+      throw new Error("Master image upload did not save correctly. Try Choose image again.");
+    }
+    requireDatasetMasterImage(referenceImage);
     const info: any = await comfy().objectInfo();
     const availableModels: string[] = [
       ...(info.UNETLoader?.input?.required?.unet_name?.[0] || []),
@@ -1201,35 +1215,43 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
       config.datasetMode,
       config.masterIdentityStrength
     );
-    for (const item of prompts) {
-      let promptText = item.caption;
-      try {
-        promptText = applyLoraActivations(promptText, stackLoras, registeredLoras);
-      } catch { /* keep caption */ }
-      const input = generationSchema.parse({
-        prompt: promptText, negativePrompt: datasetNegative,
-        width: config.width, height: config.height, seed: item.seed,
-        steps: architecture === "krea2" ? 8 : architecture === "illustrious" ? 28 : 9,
-        guidance: architecture === "illustrious" ? 4 : 1,
-        batchSize: 1,
-        priority: "low", outputFormat: "png",
-        sampler: architecture === "illustrious" ? "dpmpp_sde" : "res_multistep",
-        scheduler: architecture === "illustrious" ? "karras" : "simple",
-        outputName: datasetOutputName(outputSlug, item.index + 1),
-        diffusionModel: resolvedModel,
-        textEncoder: profile.textEncoder,
-        vae: profile.vae,
-        loras: stackLoras,
-        // Master Direct identity strength — user-editable in Dataset Builder.
-        references: [{ image: referenceImage, mode: "direct", strength: identityStrength }]
-      });
-      const graph = architecture === "illustrious"
-        ? buildIllustriousWorkflow(input)
-        : architecture === "anima"
-          ? buildAnimaWorkflow(input)
-          : buildWorkflow(workflowTemplate, input);
-      const result = await comfy().submit(graph, clientId, "low") as { prompt_id: string };
-      promptIds.push(result.prompt_id);
+    try {
+      for (const item of prompts) {
+        let promptText = item.caption;
+        try {
+          promptText = applyLoraActivations(promptText, stackLoras, registeredLoras);
+        } catch { /* keep caption */ }
+        const input = generationSchema.parse({
+          prompt: promptText, negativePrompt: datasetNegative,
+          width: config.width, height: config.height, seed: item.seed,
+          steps: architecture === "krea2" ? 8 : architecture === "illustrious" ? 28 : 9,
+          guidance: architecture === "illustrious" ? 4 : 1,
+          batchSize: 1,
+          priority: "low", outputFormat: "png",
+          sampler: architecture === "illustrious" ? "dpmpp_sde" : "res_multistep",
+          scheduler: architecture === "illustrious" ? "karras" : "simple",
+          outputName: datasetOutputName(outputSlug, item.index + 1),
+          diffusionModel: resolvedModel,
+          textEncoder: profile.textEncoder,
+          vae: profile.vae,
+          loras: stackLoras,
+          // Master Direct identity strength — user-editable in Dataset Builder.
+          references: [{ image: referenceImage, mode: "direct", strength: identityStrength }]
+        });
+        const graph = architecture === "illustrious"
+          ? buildIllustriousWorkflow(input)
+          : architecture === "anima"
+            ? buildAnimaWorkflow(input)
+            : buildWorkflow(workflowTemplate, input);
+        const result = await comfy().submit(graph, clientId, "low") as { prompt_id: string };
+        promptIds.push(result.prompt_id);
+      }
+    } catch (error) {
+      await cancelSubmittedDatasetPrompts(promptIds);
+      throw new Error(
+        `Dataset queue failed after ${promptIds.length}/${prompts.length} shots: ${simplify(error)}. ` +
+          `Check ComfyUI is running and the master image is still under ComfyUI/input/z-image-studio/.`
+      );
     }
     const datasetDirectory = resolveInside(datasetsRoot, id);
     fs.mkdirSync(resolveInside(datasetDirectory, "images"), { recursive: true });
@@ -1676,6 +1698,43 @@ function resolveComfyInputRelative(relative: string): string | undefined {
   if (!clean || clean.includes("..") || path.isAbsolute(clean)) return undefined;
   const full = path.join(root, "ComfyUI", "input", clean);
   return fs.existsSync(full) ? full : undefined;
+}
+
+/**
+ * Fail fast before queueing dataset graphs. Missing masters produce dozens of Comfy
+ * LoadImage FileNotFound errors (see vault / comfyui-error.log for z-image-studio/*.png).
+ */
+function requireDatasetMasterImage(relative: string): string {
+  const full = resolveComfyInputRelative(relative);
+  if (!full) {
+    throw new Error(
+      `Master image is missing from ComfyUI input (${relative || "empty path"}). ` +
+        `Re-upload the master image in Dataset Builder (Choose image), then generate again. ` +
+        `Saved character paths go stale if the file was deleted from ComfyUI/input/z-image-studio/.`
+    );
+  }
+  try {
+    const size = fs.statSync(full).size;
+    if (size < 32) throw new Error("Master image file is empty or unreadable.");
+  } catch (error: any) {
+    if (String(error?.message || "").includes("Master image")) throw error;
+    throw new Error(`Master image could not be read (${relative}). Re-upload it and try again.`);
+  }
+  return full;
+}
+
+/** Best-effort cancel of partially submitted dataset prompts when create/extend fails mid-loop. */
+async function cancelSubmittedDatasetPrompts(promptIds: string[]) {
+  for (const promptId of promptIds) {
+    try {
+      await comfy().deleteQueued(promptId);
+    } catch { /* already running or gone */ }
+  }
+  if (promptIds.length) {
+    try {
+      await comfy().interrupt();
+    } catch { /* ignore */ }
+  }
 }
 
 /** Find gallery generation stack by output filename basename. */

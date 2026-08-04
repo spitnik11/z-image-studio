@@ -44,14 +44,15 @@ export class ComfyClient {
   stats() { return this.json("/system_stats"); }
   history(id: string) { return this.json(`/history/${encodeURIComponent(id)}`); }
   queue() { return this.json("/queue"); }
-  submit(prompt: unknown, clientId: string, priority: "next" | "normal" | "low" = "normal") {
+  submit(prompt: unknown, clientId: string, priority: "next" | "normal" | "low" = "normal", timeoutMs = 60_000) {
     const queue: Record<string, unknown> = {};
     if (priority === "next") queue.front = true;
     if (priority === "low") queue.number = 1_000_000_000_000 + Date.now();
+    // Dataset batches submit many graphs; allow longer than the default 10s catalog timeout.
     return this.json("/prompt", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ prompt, client_id: clientId, ...queue })
-    });
+    }, timeoutMs);
   }
   deleteQueued(promptId: string) {
     return this.json("/queue", {
