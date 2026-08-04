@@ -5547,3 +5547,32 @@ button.stop-dataset:hover{background:color-mix(in srgb,#ff6b6b 28%,transparent)}
   min-width: 160px;
   margin-top: 0;
 }
+
+/* Dataset Builder — master identity strength */
+.dataset-master-strength-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dataset-master-strength-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: #d7f75d;
+}
+.dataset-master-strength-row input[type="number"] {
+  width: 4.5rem;
+  flex: none;
+}
+.dataset-master-strength-row button.ghost {
+  border: 1px solid #303743;
+  border-radius: 8px;
+  background: #161b22;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.dataset-master-strength-row button.ghost:hover {
+  border-color: #4a5568;
+  color: #d7f75d;
+}

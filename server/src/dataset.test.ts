@@ -13,7 +13,8 @@ import {
   getInstagramUgcShotCount,
   getInstagramUgcShots,
   resolveDatasetLoraHints,
-  resolveDatasetNegativePrompt
+  resolveDatasetNegativePrompt,
+  resolveMasterIdentityStrength
 } from "./dataset.js";
 
 const projectRoot = path.resolve(process.cwd(), "..");
@@ -225,5 +226,24 @@ describe("Dataset Builder", () => {
     expect(datasetIdentityReferenceStrength("krea2", "instagram-ugc")).toBe(0.72);
     expect(datasetIdentityReferenceStrength("krea2", "standard")).toBe(0.85);
     expect(datasetIdentityReferenceStrength("z-image", "instagram-ugc")).toBe(0.55);
+  });
+
+  it("resolves editable master identity strength with defaults and clamps", () => {
+    expect(resolveMasterIdentityStrength("krea2", "instagram-ugc")).toBe(0.72);
+    expect(resolveMasterIdentityStrength("krea2", "instagram-ugc", 0.4)).toBe(0.4);
+    expect(resolveMasterIdentityStrength("krea2", "standard", 1.2)).toBe(1.2);
+    expect(resolveMasterIdentityStrength("z-image", "standard", 0)).toBe(0);
+    expect(resolveMasterIdentityStrength("krea2", "instagram-ugc", 3)).toBe(2);
+    expect(resolveMasterIdentityStrength("krea2", "instagram-ugc", -1)).toBe(0);
+    expect(resolveMasterIdentityStrength("illustrious", "standard", undefined)).toBe(0.65);
+    // Schema accepts explicit strength
+    const parsed = datasetSchema.parse({
+      name: "Strength Set",
+      trigger: "zperson",
+      model: "krea2.safetensors",
+      basePrompt: "same character",
+      masterIdentityStrength: 0.35
+    });
+    expect(parsed.masterIdentityStrength).toBe(0.35);
   });
 });

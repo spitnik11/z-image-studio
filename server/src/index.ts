@@ -37,7 +37,8 @@ import {
   datasetPrompts,
   datasetSchema,
   resolveDatasetLoraHints,
-  resolveDatasetNegativePrompt
+  resolveDatasetNegativePrompt,
+  resolveMasterIdentityStrength
 } from "./dataset.js";
 import {
   DEFAULT_PROMPT_LIST_ID,
@@ -866,9 +867,11 @@ app.post("/api/datasets/:id/extend", async (q, r) => {
     const extendNegative = resolveDatasetNegativePrompt(record.datasetMode, record.negativePrompt);
     const registeredLoras = loraRegistry.list();
     // Generation text = promptPlan captions only (list + character). Never master PNG positive prompt.
-    const identityStrength = datasetIdentityReferenceStrength(
+    // Prefer strength stored on the original build; extension can override via body later if needed.
+    const identityStrength = resolveMasterIdentityStrength(
       architecture,
-      record.datasetMode === "instagram-ugc" ? "instagram-ugc" : "standard"
+      record.datasetMode === "instagram-ugc" ? "instagram-ugc" : "standard",
+      record.masterIdentityStrength
     );
     for (const item of prompts) {
       const globalIndex = currentGenerated + item.index;
@@ -887,7 +890,7 @@ app.post("/api/datasets/:id/extend", async (q, r) => {
         outputName: datasetOutputName(outputSlug, globalIndex + 1),
         diffusionModel: record.model, textEncoder: profile.textEncoder, vae: profile.vae,
         loras: stackLoras,
-        // Master image = identity lock only (lower strength so shot-list pose/outfit can vary).
+        // Master Direct strength: stored masterIdentityStrength or mode default.
         references: [{ image: record.referenceImage, mode: "direct", strength: identityStrength }]
       });
       const graph = architecture === "illustrious"
@@ -1105,9 +1108,15 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
     const resolvedSeed = randomizeSeed
       ? crypto.randomInt(0, 2_147_483_647)
       : Math.max(0, Math.floor(rawSeed));
+    const rawMasterStrength = rawConfig.masterIdentityStrength;
+    const parsedMasterStrength =
+      rawMasterStrength === undefined || rawMasterStrength === null || rawMasterStrength === ""
+        ? undefined
+        : Number(rawMasterStrength);
     const config = datasetSchema.parse({
       ...rawConfig, count: Number(rawConfig.count), width: Number(rawConfig.width),
       height: Number(rawConfig.height), seed: resolvedSeed,
+      masterIdentityStrength: Number.isFinite(parsedMasterStrength) ? parsedMasterStrength : undefined,
       loras: Array.isArray(rawConfig.loras) ? rawConfig.loras : []
     });
     const characterProfile = config.characterProfileId ? characterProfiles.get(config.characterProfileId) : undefined;
@@ -1187,7 +1196,11 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
     const outputSlug = datasetOutputSlug(config.name || config.trigger, id);
     const promptIds: string[] = [];
     const datasetNegative = resolveDatasetNegativePrompt(config.datasetMode, config.negativePrompt);
-    const identityStrength = datasetIdentityReferenceStrength(architecture, config.datasetMode);
+    const identityStrength = resolveMasterIdentityStrength(
+      architecture,
+      config.datasetMode,
+      config.masterIdentityStrength
+    );
     for (const item of prompts) {
       let promptText = item.caption;
       try {
@@ -1207,7 +1220,7 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
         textEncoder: profile.textEncoder,
         vae: profile.vae,
         loras: stackLoras,
-        // Identity lock only — do not use high strength that freezes master pose/outfit.
+        // Master Direct identity strength — user-editable in Dataset Builder.
         references: [{ image: referenceImage, mode: "direct", strength: identityStrength }]
       });
       const graph = architecture === "illustrious"
@@ -1236,6 +1249,7 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
         stack.matchedFromMaster
           ? `Master model matched: ${String(resolvedModel).replace(/\.safetensors$/i, "")}.`
           : `Using selected model ${String(resolvedModel).replace(/\.safetensors$/i, "")}.`,
+        `Master image strength (Direct identity): ${identityStrength}.`,
         stackLoras.length
           ? `Applied LoRAs (builder list): ${stackLoras.map(l => `${String(l.name).replace(/\.safetensors$/i, "")}:${l.strength}`).join(", ")}.`
           : "Applied LoRAs: none (builder list empty).",
@@ -1246,6 +1260,7 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
       ].filter(Boolean).join(" "),
       ...configWithStack,
       negativePrompt: datasetNegative,
+      masterIdentityStrength: identityStrength,
       outputSlug,
       stackNote: stack.note,
       stackSources: stack.sources,

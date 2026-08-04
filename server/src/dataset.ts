@@ -194,6 +194,12 @@ export const datasetSchema = z.object({
    * Instagram UGC defaults include clothing-coverage / anti-nude terms (not only identity).
    */
   negativePrompt: z.string().trim().max(2500).optional(),
+  /**
+   * Master image identity / Direct reference strength (Krea ref_boost, Z-Image structural ref, etc.).
+   * Editable in Dataset Builder. Omitted → mode + architecture defaults via resolveMasterIdentityStrength.
+   * Higher = lock face/body closer to master (may copy pose/outfit). Lower = freer list-driven variety.
+   */
+  masterIdentityStrength: z.number().min(0).max(2).optional(),
   /** Generation LoRAs from the Dataset Builder list (authoritative on create). Applied during sampling. */
   loras: z.array(z.object({
     name: z.string().min(1).max(260).refine(v => !path.isAbsolute(v) && !v.includes("..")),
@@ -346,22 +352,37 @@ export function composeCharacterFeatureBlock(input: DatasetInput): string {
 }
 
 /**
- * Identity reference strength for dataset sampling.
+ * Default master-image identity strength by architecture + dataset mode.
  *
  * Master image is only an identity lock (Krea Identity / structural ref) — NOT a prompt source.
  * High ref_boost (e.g. 1.15) copies the master's pose, outfit, and framing and fights the shot list.
- * Instagram UGC needs lower strength so list prompts (outfit/pose/camera) can win.
+ * Instagram UGC defaults lower so list prompts (outfit/pose/camera) can win.
  */
 export function datasetIdentityReferenceStrength(
   architecture: string,
   datasetMode: "standard" | "instagram-ugc" = "standard"
 ): number {
   if (datasetMode === "instagram-ugc") {
-    // List drives pose/outfit; keep just enough identity lock.
     return architecture === "krea2" ? 0.72 : architecture === "illustrious" ? 0.55 : 0.55;
   }
-  // Standard matrix still wants variety — below legacy 1.15/0.8 which frozen the master look.
   return architecture === "krea2" ? 0.85 : architecture === "illustrious" ? 0.65 : 0.65;
+}
+
+/**
+ * Resolve strength applied to master Direct reference for every dataset shot.
+ * Custom value (from Dataset Builder) wins when finite; otherwise mode/architecture default.
+ * Clamped to generationSchema references.strength [0, 2].
+ */
+export function resolveMasterIdentityStrength(
+  architecture: string,
+  datasetMode: "standard" | "instagram-ugc" | string = "standard",
+  custom?: number | null
+): number {
+  const mode = datasetMode === "instagram-ugc" ? "instagram-ugc" : "standard";
+  if (custom !== undefined && custom !== null && Number.isFinite(Number(custom))) {
+    return Math.min(2, Math.max(0, Number(custom)));
+  }
+  return datasetIdentityReferenceStrength(architecture, mode);
 }
 
 /**

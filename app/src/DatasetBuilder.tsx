@@ -9,6 +9,7 @@ type DatasetJob = {
   characterAdjustments?: CharacterAdjustments;
   datasetMode?: "standard" | "instagram-ugc";
   seed?: number;
+  masterIdentityStrength?: number;
   loras?: Array<{ name: string; strength: number }>;
   appliedLoras?: Array<{ name: string; strength: number }>;
   stackMatchedFromMaster?: boolean;
@@ -32,6 +33,12 @@ const DEFAULT_INSTAGRAM_UGC_NEGATIVE = [
 ].join(", ");
 function defaultNegativeForMode(mode: DatasetMode) {
   return mode === "instagram-ugc" ? DEFAULT_INSTAGRAM_UGC_NEGATIVE : DEFAULT_STANDARD_NEGATIVE;
+}
+/** Mirrors server datasetIdentityReferenceStrength defaults. */
+function defaultMasterIdentityStrength(mode: DatasetMode, architecture?: string) {
+  const arch = architecture || "krea2";
+  if (mode === "instagram-ugc") return arch === "krea2" ? 0.72 : 0.55;
+  return arch === "krea2" ? 0.85 : 0.65;
 }
 type MasterStackInfo = {
   model?: string;
@@ -103,9 +110,15 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
   const [characterAdjustments, setCharacterAdjustments] = useState<CharacterAdjustments>({ hair: "", body: "", other: "" });
   /** Editable negative for every dataset shot (defaults change with mode). */
   const [negativePrompt, setNegativePrompt] = useState(DEFAULT_STANDARD_NEGATIVE);
+  /**
+   * Master Direct / identity reference strength (Krea ref_boost, Z-Image structural, Illustrious CN).
+   * Higher = closer to master look; lower = freer pose/outfit from the shot list.
+   */
+  const [masterIdentityStrength, setMasterIdentityStrength] = useState(0.85);
   const [presetMaster,setPresetMaster]=useState("");
   const [reviewJob, setReviewJob] = useState<DatasetJob>();
   const active = submitting || jobs.some(job => ["pending", "active", "paused"].includes(job.status));
+  const selectedArchitecture = models.find(item => item.name === model)?.architecture;
 
   async function refresh() {
     const response = await fetch("/api/datasets");
@@ -115,6 +128,16 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
   useEffect(() => {
     setModel(current => current || models.find(item => item.architecture === "krea2")?.name || models.find(item => item.architecture === "z-image")?.name || "");
   }, [models]);
+  // Keep master strength default aligned with mode/architecture until the user tweaks away from a known default.
+  useEffect(() => {
+    const nextDefault = defaultMasterIdentityStrength(datasetMode, selectedArchitecture);
+    setMasterIdentityStrength(current => {
+      const known = new Set([0.55, 0.65, 0.72, 0.85, 1.15, 0.8]);
+      // Treat near-defaults as resettable when mode/model changes
+      const isKnownDefault = [...known].some(v => Math.abs(v - current) < 0.001);
+      return isKnownDefault ? nextDefault : current;
+    });
+  }, [datasetMode, selectedArchitecture]);
   useEffect(() => {
     if (model) void refreshDatasetLoras(model);
   }, [model, models]);
@@ -305,6 +328,7 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
       // Authoritative stack: server must not re-inject master LoRAs the user removed.
       loras: datasetLoras,
       negativePrompt: negativePrompt.trim() || defaultNegativeForMode(datasetMode),
+      masterIdentityStrength: Math.min(2, Math.max(0, Number(masterIdentityStrength) || 0)),
       promptMatrix: { ...matrix, varyOutfits, varyBackgrounds }
     }));
     try {
@@ -434,9 +458,44 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
           <strong>{masterStack.matchedFromMaster ? "Master stack detected" : "Manual stack / no metadata"}</strong>
           <small>{masterStack.note}</small>
           {!!masterStack.unmatchedLoras?.length && <small className="master-stack-warn">Missing in Comfy: {masterStack.unmatchedLoras.join(", ")}</small>}
-          <span className="master-stack-hint">Master image is an identity reference + model/LoRA stack only — its original generation prompt is never reused. Dataset text comes from the shot list + Character description. If poses/outfits still match the master too closely, lower LoRA strengths or rebuild (identity lock is set moderate so the list can win).</span>
+          <span className="master-stack-hint">Master image is an identity reference + model/LoRA stack only — its original generation prompt is never reused. Dataset text comes from the shot list + Character description. Use <strong>Master image strength</strong> below to balance face lock vs outfit/pose variety.</span>
         </div>
       )}
+      <label className="dataset-master-strength-field">Master image strength
+        <div className="dataset-master-strength-row">
+          <input
+            type="range"
+            min={0}
+            max={2}
+            step={0.05}
+            value={masterIdentityStrength}
+            onChange={event => setMasterIdentityStrength(Number(event.target.value))}
+            aria-label="Master image identity strength"
+          />
+          <input
+            type="number"
+            min={0}
+            max={2}
+            step={0.05}
+            value={masterIdentityStrength}
+            onChange={event => setMasterIdentityStrength(Math.min(2, Math.max(0, Number(event.target.value) || 0)))}
+            title="Direct identity / ref_boost strength applied to the master image"
+          />
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => setMasterIdentityStrength(defaultMasterIdentityStrength(datasetMode, selectedArchitecture))}
+            title="Restore recommended default for this mode and model"
+          >
+            Default
+          </button>
+        </div>
+        <small className="dataset-seed-hint">
+          Applied as Direct identity on every shot (Krea Identity ref_boost / Z-Image structural / Illustrious structure).
+          {" "}{masterIdentityStrength < 0.45 ? "Low — freer pose & outfit, weaker face lock." : masterIdentityStrength > 1.0 ? "High — strong master lock; may copy pose/outfit from the master." : "Balanced — identity lock with room for list variety."}
+          {" "}Recommended: Instagram {defaultMasterIdentityStrength("instagram-ugc", selectedArchitecture)}, Standard {defaultMasterIdentityStrength("standard", selectedArchitecture)}.
+        </small>
+      </label>
       <label>Character description<textarea value={basePrompt} onChange={event => setBasePrompt(event.target.value)} placeholder="Stable identity only — face, hair, body. Outfits come from the shot list in Instagram mode."/></label>
       <label className="dataset-negative-field">Negative prompt
         <textarea
@@ -575,7 +634,7 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
       {reviewJob ? <div className="review-checklist"><div className="section-title"><span><Check/> Before training</span></div><ol><li><strong>Review every image</strong><span>Keep strong identity matches. Remove drift, anatomy problems, and duplicates from training.</span></li><li><strong>Check captions</strong><span>Caption edits save automatically and follow each kept image into LoRA Lab.</span></li><li><strong>Add anything missing</strong><span>New local images enter as Unsure so they cannot train until you approve them.</span></li><li><strong>Continue with kept images</strong><span>At least 3 are required; 12–30 varied, high-quality images are recommended.</span></li></ol></div> : <><div className="section-title history-title"><span><Images/> Dataset history</span><button onClick={() => refresh().then(() => setNotice("Dataset history refreshed.")).catch(error => setNotice(error.message))} aria-label="Refresh dataset history"><RefreshCw/>Refresh</button></div>
       {jobs.map(job => <article key={job.id}>
         <div className="training-job-head"><strong>{job.name}</strong><span className={`training-state ${job.status}`}>{job.status}</span></div>
-        <small>{job.datasetMode === "instagram-ugc" ? "Instagram UGC · " : ""}{job.status === "completed" ? `${job.images?.length || 0} images` : `${job.images?.length || 0}/${job.count} images`}{typeof job.seed === "number" ? ` · seed ${job.seed}` : ""} · {job.phase}</small>
+        <small>{job.datasetMode === "instagram-ugc" ? "Instagram UGC · " : ""}{job.status === "completed" ? `${job.images?.length || 0} images` : `${job.images?.length || 0}/${job.count} images`}{typeof job.seed === "number" ? ` · seed ${job.seed}` : ""}{typeof job.masterIdentityStrength === "number" ? ` · master ${job.masterIdentityStrength}` : ""} · {job.phase}</small>
         {(job.model || job.loras?.length || job.appliedLoras?.length) && (
           <small className="dataset-stack-line" title={(job.appliedLoras || job.loras || []).map(l => `${l.name}:${l.strength}`).join("\n") || job.stackNote || ""}>
             {(job.model || "").replace(/\.safetensors$/i, "") || "model?"}
