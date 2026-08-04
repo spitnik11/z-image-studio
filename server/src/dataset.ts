@@ -158,6 +158,13 @@ export const datasetSchema = z.object({
   count: z.number().int().min(12).max(40).default(40),
   width: z.number().int().min(384).max(1024).multipleOf(64).default(512),
   height: z.number().int().min(384).max(1024).multipleOf(64).default(768),
+  /**
+   * Base seed for this dataset run.
+   * - Image N uses Comfy seed = base + N
+   * - Instagram shuffle permutation is seeded by base (deterministic for reproducibility)
+   * Dataset Builder sends a fresh random seed each Build unless "Lock seed" is on.
+   * Do not hardcode 42 in the UI — that made every consecutive run identical.
+   */
   seed: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(42),
   variationOffset: z.number().int().min(0).max(1000).default(0),
   characterProfileId: z.string().uuid().optional(),

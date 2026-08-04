@@ -1092,9 +1092,22 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
   try {
     if (datasetRecords.some(record => ["pending", "active", "paused"].includes(record.status))) throw new Error("Only one dataset can be built at a time.");
     const rawConfig = JSON.parse(String(q.body.config || "{}"));
+    // Seed drives per-image Comfy noise (seed+index) and Instagram shuffle order.
+    // Randomize when missing/invalid so consecutive builds never silently reuse the old hardcoded 42.
+    const rawSeed = Number(rawConfig.seed);
+    const randomizeSeed =
+      rawConfig.randomizeSeed === true ||
+      rawConfig.randomizeSeed === "true" ||
+      rawConfig.seed === undefined ||
+      rawConfig.seed === null ||
+      rawConfig.seed === "" ||
+      !Number.isFinite(rawSeed);
+    const resolvedSeed = randomizeSeed
+      ? crypto.randomInt(0, 2_147_483_647)
+      : Math.max(0, Math.floor(rawSeed));
     const config = datasetSchema.parse({
       ...rawConfig, count: Number(rawConfig.count), width: Number(rawConfig.width),
-      height: Number(rawConfig.height), seed: Number(rawConfig.seed),
+      height: Number(rawConfig.height), seed: resolvedSeed,
       loras: Array.isArray(rawConfig.loras) ? rawConfig.loras : []
     });
     const characterProfile = config.characterProfileId ? characterProfiles.get(config.characterProfileId) : undefined;

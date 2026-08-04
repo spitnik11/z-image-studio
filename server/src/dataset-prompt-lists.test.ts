@@ -125,4 +125,36 @@ describe("dataset prompt lists", () => {
     const sequential = datasetPrompts({ ...input, promptOrder: "sequential" });
     expect(prompts.map(p => p.listIndex)).not.toEqual(sequential.map(p => p.listIndex));
   });
+
+  it("different seeds produce different shuffle orders and different image noise seeds", () => {
+    const projectRoot = path.resolve(process.cwd(), "..");
+    const base = {
+      name: "Seed Variety",
+      trigger: "lili doe",
+      model: "krea2.safetensors",
+      basePrompt: "character",
+      count: 12,
+      width: 512,
+      height: 768,
+      datasetMode: "instagram-ugc" as const,
+      promptOrder: "shuffle" as const,
+      projectRoot
+    };
+    const a = datasetPrompts(datasetSchema.parse({ ...base, seed: 111 }));
+    const b = datasetPrompts(datasetSchema.parse({ ...base, seed: 999 }));
+    // Same fixed seed must be reproducible (not live Math.random)
+    const aAgain = datasetPrompts(datasetSchema.parse({ ...base, seed: 111 }));
+    expect(a.map(p => p.listIndex)).toEqual(aAgain.map(p => p.listIndex));
+    expect(a.map(p => p.seed)).toEqual(aAgain.map(p => p.seed));
+    // Different base seed → different permutation and different Comfy seeds
+    expect(a.map(p => p.listIndex)).not.toEqual(b.map(p => p.listIndex));
+    expect(a.map(p => p.seed)).not.toEqual(b.map(p => p.seed));
+    expect(a[0].seed).toBe(111);
+    expect(b[0].seed).toBe(999);
+    // Sequential with same seed still reuses identical noise seeds across "runs"
+    const seqA = datasetPrompts(datasetSchema.parse({ ...base, promptOrder: "sequential", seed: 42 }));
+    const seqB = datasetPrompts(datasetSchema.parse({ ...base, promptOrder: "sequential", seed: 42 }));
+    expect(seqA.map(p => p.seed)).toEqual(seqB.map(p => p.seed));
+    expect(seqA.map(p => p.listIndex)).toEqual(seqB.map(p => p.listIndex));
+  });
 });

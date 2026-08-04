@@ -67,6 +67,9 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
   const [captionStrategy, setCaptionStrategy] = useState("flexible-character");
   const [datasetMode, setDatasetMode] = useState<DatasetMode>("standard");
   const [promptOrder, setPromptOrder] = useState<PromptOrder>("sequential");
+  /** Base seed drives Comfy noise (seed+index) AND Instagram shuffle permutation. Fresh each build unless locked. */
+  const [seed, setSeed] = useState(() => Math.floor(Math.random() * 2_147_483_647));
+  const [lockSeed, setLockSeed] = useState(false);
   const [promptList, setPromptList] = useState<PromptListDoc | null>(null);
   const [promptEditor, setPromptEditor] = useState("");
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
@@ -255,18 +258,25 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
     const ref = profile.masterReferenceImages?.[0];
     if (ref) void inspectMasterStack(undefined, ref);
   }
+  function freshDatasetSeed() {
+    // Full 31-bit positive range so consecutive runs never reuse the old hardcoded 42.
+    return Math.floor(Math.random() * 2_147_483_647);
+  }
   async function build() {
     setNotice("");
     const profile = profiles.find(value => value.id === characterProfileId);
     if ((!master && !presetMaster && !profile?.masterReferenceImages?.length) || !name.trim() || !trigger.trim() || !model) return setNotice("Choose a master image or saved character reference, plus a dataset name, trigger phrase, and image model.");
+    // New seed every run unless locked — seed drives both noise and shuffle order.
+    const runSeed = lockSeed ? seed : freshDatasetSeed();
+    if (!lockSeed) setSeed(runSeed);
     setSubmitting(true);
-    setNotice(`Preparing ${count} labelled images with matched model/LoRA stack…`);
+    setNotice(`Preparing ${count} labelled images (seed ${runSeed}) with matched model/LoRA stack…`);
     const body = new FormData();
     if (master) body.append("master", master);
     body.append("config", JSON.stringify({
       name, trigger, model, basePrompt,
       masterReference: presetMaster || undefined,
-      characterAdjustments, count, width: 512, height: 768, seed: 42,
+      characterAdjustments, count, width: 512, height: 768, seed: runSeed,
       characterProfileId: characterProfileId || undefined,
       captionStrategy,
       datasetMode,
@@ -280,8 +290,13 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "Dataset generation could not start.");
       setJobs(current => [payload, ...current.filter(job => job.id !== payload.id)]);
+      const usedSeed = Number(payload.seed ?? runSeed);
       const stackMsg = payload.stackNote ? ` Stack: ${payload.stackNote}.` : "";
-      setNotice(`${count} images queued.${stackMsg} Progress is in Dataset history.`);
+      setNotice(
+        lockSeed
+          ? `${count} images queued · locked seed ${usedSeed}.${stackMsg} Rebuild will match this run.`
+          : `${count} images queued · seed ${usedSeed}.${stackMsg} Next Build gets a new seed automatically.`
+      );
     } catch (error: any) {
       setNotice(error.message || "Dataset generation could not start.");
     } finally {
@@ -403,6 +418,29 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
         <div className="adjustment-advice"><AlertTriangle/><span>For temporary outfit, pose, expression, or scene changes, use the shot list (Instagram mode) or Prompt variety (standard). Mixing unlabelled identity changes can weaken a LoRA.</span></div>
       </details>
       <label>Dataset size<select value={count} onChange={event => setCount(Number(event.target.value))}><option value={12}>12 · test</option><option value={24}>24 · compact</option><option value={40}>40 · complete{datasetMode === "instagram-ugc" ? " (full shot list)" : ""}</option></select></label>
+      <label className="dataset-seed-field">Run seed
+        <div className="dataset-seed-row">
+          <input
+            type="number"
+            min={0}
+            max={2147483646}
+            value={seed}
+            disabled={!lockSeed}
+            onChange={event => setSeed(Math.max(0, Math.floor(Number(event.target.value) || 0)))}
+            title={lockSeed ? "Locked seed — same noise + same shuffle order on rebuild" : "Auto-refreshed each build"}
+          />
+          <button type="button" className="ghost" onClick={() => { setLockSeed(false); setSeed(freshDatasetSeed()); }} title="Pick a new seed now">New</button>
+          <label className="dataset-seed-lock">
+            <input type="checkbox" checked={lockSeed} onChange={event => setLockSeed(event.target.checked)} />
+            Lock
+          </label>
+        </div>
+        <small className="dataset-seed-hint">
+          {lockSeed
+            ? "Locked: every rebuild reuses this seed (identical noise order + same shuffle)."
+            : "Unlocked: each Build uses a fresh seed so consecutive datasets differ (shuffle + sampler noise)."}
+        </small>
+      </label>
       <label>Caption strategy<select value={captionStrategy} onChange={event => setCaptionStrategy(event.target.value)}><option value="identity-focused">Identity-focused</option><option value="flexible-character">Flexible character</option><option value="outfit-concept">Outfit / concept</option><option value="style">Style</option><option value="custom">Custom</option></select></label>
       {datasetMode === "instagram-ugc" ? (
         <details className="prompt-matrix" open>
@@ -485,7 +523,7 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
       {reviewJob ? <div className="review-checklist"><div className="section-title"><span><Check/> Before training</span></div><ol><li><strong>Review every image</strong><span>Keep strong identity matches. Remove drift, anatomy problems, and duplicates from training.</span></li><li><strong>Check captions</strong><span>Caption edits save automatically and follow each kept image into LoRA Lab.</span></li><li><strong>Add anything missing</strong><span>New local images enter as Unsure so they cannot train until you approve them.</span></li><li><strong>Continue with kept images</strong><span>At least 3 are required; 12–30 varied, high-quality images are recommended.</span></li></ol></div> : <><div className="section-title history-title"><span><Images/> Dataset history</span><button onClick={() => refresh().then(() => setNotice("Dataset history refreshed.")).catch(error => setNotice(error.message))} aria-label="Refresh dataset history"><RefreshCw/>Refresh</button></div>
       {jobs.map(job => <article key={job.id}>
         <div className="training-job-head"><strong>{job.name}</strong><span className={`training-state ${job.status}`}>{job.status}</span></div>
-        <small>{job.datasetMode === "instagram-ugc" ? "Instagram UGC · " : ""}{job.status === "completed" ? `${job.images?.length || 0} images` : `${job.images?.length || 0}/${job.count} images`} · {job.phase}</small>
+        <small>{job.datasetMode === "instagram-ugc" ? "Instagram UGC · " : ""}{job.status === "completed" ? `${job.images?.length || 0} images` : `${job.images?.length || 0}/${job.count} images`}{typeof job.seed === "number" ? ` · seed ${job.seed}` : ""} · {job.phase}</small>
         {(job.model || job.loras?.length) && (
           <small className="dataset-stack-line" title={job.stackNote || ""}>
             {(job.model || "").replace(/\.safetensors$/i, "") || "model?"}
