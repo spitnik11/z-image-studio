@@ -119,6 +119,117 @@ function trimStrength(value: number): string {
   return String(Math.round(value * 1000) / 1000);
 }
 
+export type ParsedGenerationMeta = {
+  model?: string;
+  loras: Array<{ name: string; strength: number }>;
+  seed?: number;
+  steps?: number;
+  guidance?: number;
+  width?: number;
+  height?: number;
+  sampler?: string;
+  parameters?: string;
+  source: "png-parameters" | "none";
+};
+
+/**
+ * Parse A1111 / Civitai "parameters" text for Model + LoRA tags.
+ * Used to match dataset generation to a master image's stack.
+ */
+export function parseA1111Parameters(text: string): ParsedGenerationMeta {
+  const parameters = String(text || "").trim();
+  const empty: ParsedGenerationMeta = { loras: [], source: parameters ? "png-parameters" : "none" };
+  if (!parameters) return empty;
+
+  const loras: Array<{ name: string; strength: number }> = [];
+  const loraRe = /<lora:([^:>]+)(?::([-\d.]+))?>/gi;
+  let match: RegExpExecArray | null;
+  const seen = new Set<string>();
+  while ((match = loraRe.exec(parameters)) !== null) {
+    const base = stripSafetensorsExt(match[1].trim());
+    if (!base || seen.has(base.toLowerCase())) continue;
+    seen.add(base.toLowerCase());
+    const strength = match[2] !== undefined && Number.isFinite(Number(match[2])) ? Number(match[2]) : 1;
+    loras.push({ name: `${base}.safetensors`, strength });
+  }
+
+  // Model: Name may appear without extension; take last occurrence on the settings line.
+  let model: string | undefined;
+  const modelMatches = [...parameters.matchAll(/(?:^|,\s*)Model:\s*([^,\n]+)/gi)];
+  if (modelMatches.length) {
+    const raw = modelMatches[modelMatches.length - 1][1].trim().replace(/^["']|["']$/g, "");
+    if (raw) model = /\.safetensors$/i.test(raw) ? raw : `${raw}.safetensors`;
+  }
+
+  const num = (label: string) => {
+    const m = parameters.match(new RegExp(`${label}:\\s*([\\d.]+)`, "i"));
+    return m ? Number(m[1]) : undefined;
+  };
+  const size = parameters.match(/Size:\s*(\d+)\s*x\s*(\d+)/i);
+  const samplerMatch = parameters.match(/Sampler:\s*([^,\n]+)/i);
+
+  return {
+    model,
+    loras,
+    seed: num("Seed"),
+    steps: num("Steps"),
+    guidance: num("CFG scale"),
+    width: size ? Number(size[1]) : undefined,
+    height: size ? Number(size[2]) : undefined,
+    sampler: samplerMatch?.[1]?.trim(),
+    parameters,
+    source: "png-parameters"
+  };
+}
+
+/** Read generation stack from a PNG path (parameters / Comment tEXt). */
+export function readGenerationMetaFromPng(filePath: string): ParsedGenerationMeta {
+  try {
+    if (!filePath || !fs.existsSync(filePath) || !/\.png$/i.test(filePath)) {
+      return { loras: [], source: "none" };
+    }
+    const meta = readPngTextMetadata(fs.readFileSync(filePath));
+    const text = meta.parameters || meta.Parameters || meta.Comment || meta.comment || "";
+    return parseA1111Parameters(text);
+  } catch {
+    return { loras: [], source: "none" };
+  }
+}
+
+/**
+ * Match a short/base model name from PNG metadata to a Comfy-available filename.
+ * Prefers exact basename, then case-insensitive startsWith / includes.
+ */
+export function matchModelFilename(requested: string | undefined, available: string[]): string | undefined {
+  if (!requested || !available.length) return undefined;
+  const want = path.basename(requested).replace(/\.safetensors$/i, "").toLowerCase();
+  const exact = available.find(item => path.basename(item).replace(/\.safetensors$/i, "").toLowerCase() === want);
+  if (exact) return exact;
+  const starts = available.find(item => path.basename(item).toLowerCase().startsWith(want));
+  if (starts) return starts;
+  return available.find(item => path.basename(item).toLowerCase().includes(want));
+}
+
+/** Match LoRA basenames from metadata to available Comfy LoRA filenames. */
+export function matchLoraFilenames(
+  requested: Array<{ name: string; strength: number }>,
+  available: string[]
+): Array<{ name: string; strength: number; matched: boolean; requestedName: string }> {
+  return requested.map(item => {
+    const want = path.basename(item.name).replace(/\.safetensors$/i, "").toLowerCase();
+    const hit =
+      available.find(name => path.basename(name).replace(/\.safetensors$/i, "").toLowerCase() === want) ||
+      available.find(name => path.basename(name).toLowerCase().startsWith(want)) ||
+      available.find(name => path.basename(name).toLowerCase().includes(want));
+    return {
+      name: hit || item.name,
+      strength: item.strength,
+      matched: Boolean(hit),
+      requestedName: item.name
+    };
+  });
+}
+
 function normalizeHash(value?: string): string | undefined {
   if (!value) return undefined;
   const clean = String(value).trim().replace(/^0x/i, "").toLowerCase();

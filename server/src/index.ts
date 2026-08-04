@@ -30,7 +30,20 @@ import {
 import { buildVideoWorkflow, SCAIL_FILES, SCAIL_NODES, videoGenerationSchema } from "./video.js";
 import { trainingProfile, trainingSchema } from "./training.js";
 import { getTrainingPaths, missingTrainingFiles, runTrainingProcess, trainingCommands, trainingPreview, writeDatasetConfig, writeSdScriptsDatasetConfig } from "./musubi-training.js";
-import { datasetCaptionForPrompt, datasetExtensionSchema, datasetPrompts, datasetSchema } from "./dataset.js";
+import {
+  datasetCaptionForPrompt,
+  datasetExtensionSchema,
+  datasetIdentityReferenceStrength,
+  datasetPrompts,
+  datasetSchema
+} from "./dataset.js";
+import {
+  DEFAULT_PROMPT_LIST_ID,
+  listPromptLists,
+  loadPromptList,
+  replacePromptListPrompts,
+  savePromptList
+} from "./dataset-prompt-lists.js";
 import { analyzeReview, exportReviewedDataset, loadReview, removeReviewItem, saveReview, updateReviewItem } from "./dataset-review.js";
 import { buildModelManifest, detectReferenceCapabilities, detectUpscaleCatalog } from "./diagnostics.js";
 import { adapterForModel, modelAdapters } from "./model-adapters.js";
@@ -47,7 +60,10 @@ import {
 } from "./generation-history.js";
 import {
   collectResourceHashes,
-  embedCivitaiMetadataInPngFile
+  embedCivitaiMetadataInPngFile,
+  matchLoraFilenames,
+  matchModelFilename,
+  readGenerationMetaFromPng
 } from "./civitai-metadata.js";
 import { findLibraryResource, resolveInside, writeJsonAtomic } from "./file-utils.js";
 import { composeCharacterPrompts, generationCharacterSchema, type GenerationCharacter } from "./prompt-composition.js";
@@ -652,6 +668,54 @@ app.get("/api/video/diagnostics", async (_q, r) => {
   } catch (e) { r.status(503).json({ ready: false, connected: false, error: simplify(e) }); }
 });
 app.get("/api/datasets", (_q, r) => r.json(datasetRecords));
+/** Prompt lists must register before /api/datasets/:id or "prompt-lists" is captured as an id. */
+app.get("/api/datasets/prompt-lists", (_q, r) => {
+  try {
+    r.json(listPromptLists(root));
+  } catch (error) {
+    r.status(500).json({ error: simplify(error) });
+  }
+});
+app.get("/api/datasets/prompt-lists/:id", (q, r) => {
+  try {
+    r.json(loadPromptList(root, String(q.params.id || DEFAULT_PROMPT_LIST_ID)));
+  } catch (error) {
+    r.status(404).json({ error: simplify(error) });
+  }
+});
+app.put("/api/datasets/prompt-lists/:id", (q, r) => {
+  try {
+    const id = String(q.params.id || DEFAULT_PROMPT_LIST_ID);
+    let prompts: string[] = [];
+    if (Array.isArray(q.body?.prompts)) {
+      prompts = q.body.prompts.map((item: unknown) => String(item || "").trim()).filter(Boolean);
+    } else if (typeof q.body?.promptsText === "string") {
+      const text = q.body.promptsText.replace(/\r\n/g, "\n").trim();
+      prompts = text.includes("\n\n")
+        ? text.split(/\n\s*\n/).map((block: string) => block.replace(/\n/g, " ").trim()).filter(Boolean)
+        : text.split("\n").map((line: string) => line.trim()).filter(Boolean);
+    } else {
+      throw new Error("Provide prompts: string[] or promptsText: string.");
+    }
+    if (prompts.length < 1) throw new Error("Prompt list must contain at least one prompt.");
+    if (prompts.length > 200) throw new Error("Prompt list is limited to 200 entries.");
+    const saved = replacePromptListPrompts(root, id, prompts, {
+      name: q.body?.name ? String(q.body.name) : undefined,
+      description: q.body?.description ? String(q.body.description) : undefined
+    });
+    r.json(saved);
+  } catch (error: any) {
+    r.status(400).json({ error: error?.issues?.[0]?.message || simplify(error) });
+  }
+});
+app.post("/api/datasets/prompt-lists", (q, r) => {
+  try {
+    const saved = savePromptList(root, q.body);
+    r.status(201).json(saved);
+  } catch (error: any) {
+    r.status(400).json({ error: error?.issues?.[0]?.message || simplify(error) });
+  }
+});
 app.get("/api/datasets/:id", (q, r) => {
   const record = datasetRecords.find(item => item.id === q.params.id);
   if (!record) return r.status(404).json({ error: "Dataset not found." });
@@ -705,6 +769,40 @@ app.get("/api/datasets/:id/review", (q, r) => {
   if (!record) return r.status(404).json({ error: "Dataset not found." });
   r.json(loadReview(resolveInside(datasetsRoot, String(record.id)), record));
 });
+/**
+ * Hard-but-safe dataset stop: cancel remaining Comfy queue items, interrupt the running graph,
+ * keep any images already copied into the dataset folder, and free the single-dataset lock.
+ */
+app.post("/api/datasets/:id/stop", async (q, r) => {
+  try {
+    const record = datasetRecords.find(item => item.id === q.params.id);
+    if (!record) return r.status(404).json({ error: "Dataset not found." });
+    if (!["pending", "active", "paused"].includes(String(record.status))) {
+      return r.status(400).json({ error: "Only a pending, active, or paused dataset run can be stopped." });
+    }
+    record._stopRequested = true;
+    record.phase = "Stopping dataset run…";
+    persistDatasets();
+    broadcast({ type: "dataset", record });
+
+    const cancelledJobs = await cancelDatasetComfyJobs(record);
+    stopDatasetMonitor(record.id);
+    finalizeDatasetRecord(record, { stopped: true });
+    delete record._stopRequested;
+    persistDatasets();
+    broadcast({ type: "dataset", record });
+    r.json({
+      record,
+      cancelledJobs,
+      keptImages: record.images?.length || 0,
+      message: record.images?.length
+        ? `Stopped. Kept ${record.images.length} completed image(s); cancelled ${cancelledJobs} remaining job(s).`
+        : `Stopped before any images finished. Cancelled ${cancelledJobs} job(s).`
+    });
+  } catch (error) {
+    r.status(400).json({ error: simplify(error) });
+  }
+});
 app.post("/api/datasets/:id/resume", (q, r) => {
   try {
     const record = datasetRecords.find(item => item.id === q.params.id);
@@ -749,30 +847,55 @@ app.post("/api/datasets/:id/extend", async (q, r) => {
     const availableModels: string[] = info.UNETLoader?.input?.required?.unet_name?.[0] || [];
     if (!availableModels.includes(record.model)) throw new Error(`Image model is not available: ${record.model}`);
     const characterAdjustments = extension.characterAdjustments || record.characterAdjustments || { hair: "", body: "", other: "" };
+    const stackLoras = Array.isArray(record.loras) ? record.loras : [];
     const prompts = datasetPrompts({
       ...record,
+      datasetMode: record.datasetMode || "standard",
       count: extension.count,
       seed: Number(record.seed || 42) + currentGenerated,
       variationOffset: currentGenerated,
-      characterAdjustments
+      characterAdjustments,
+      loras: stackLoras
     });
     const clientId = crypto.randomUUID();
     const outputSlug = record.outputSlug || datasetOutputSlug(record.name || record.trigger, record.id);
     record.outputSlug = outputSlug;
     const nextPromptIds: string[] = [];
+    const extendNegative = record.datasetMode === "instagram-ugc"
+      ? "different person, changed identity, male, group photo, crowd, deformed face, malformed hands, extra limbs, fused fingers, blurry face, heavy beauty filter, watermark, text overlay, logo, low resolution"
+      : "different person, changed identity, duplicate person, repeated generic pose, static pose, same camera framing, distorted face, malformed hands";
+    const registeredLoras = loraRegistry.list();
+    // Generation text = promptPlan captions only (list + character). Never master PNG positive prompt.
+    const identityStrength = datasetIdentityReferenceStrength(
+      architecture,
+      record.datasetMode === "instagram-ugc" ? "instagram-ugc" : "standard"
+    );
     for (const item of prompts) {
       const globalIndex = currentGenerated + item.index;
+      let promptText = item.caption;
+      try { promptText = applyLoraActivations(promptText, stackLoras, registeredLoras); } catch { /* keep */ }
       const input = generationSchema.parse({
-        prompt: item.caption,
-        negativePrompt: "different person, changed identity, duplicate person, repeated generic pose, static pose, same camera framing, distorted face, malformed hands",
+        prompt: promptText,
+        negativePrompt: extendNegative,
         width: record.width, height: record.height, seed: item.seed,
-        steps: architecture === "krea2" ? 8 : 9, guidance: 1, batchSize: 1,
-        priority: "low", outputFormat: "png", sampler: "res_multistep", scheduler: "simple",
+        steps: record.steps || (architecture === "krea2" ? 8 : architecture === "illustrious" ? 28 : 9),
+        guidance: record.guidance ?? (architecture === "illustrious" ? 4 : 1),
+        batchSize: 1,
+        priority: "low", outputFormat: "png",
+        sampler: record.sampler || (architecture === "illustrious" ? "dpmpp_sde" : "res_multistep"),
+        scheduler: record.scheduler || (architecture === "illustrious" ? "karras" : "simple"),
         outputName: datasetOutputName(outputSlug, globalIndex + 1),
         diffusionModel: record.model, textEncoder: profile.textEncoder, vae: profile.vae,
-        loras: [], references: [{ image: record.referenceImage, mode: "direct", strength: architecture === "krea2" ? 1.15 : 0.8 }]
+        loras: stackLoras,
+        // Master image = identity lock only (lower strength so shot-list pose/outfit can vary).
+        references: [{ image: record.referenceImage, mode: "direct", strength: identityStrength }]
       });
-      const result = await comfy().submit(buildWorkflow(workflowTemplate, input), clientId, "low") as { prompt_id: string };
+      const graph = architecture === "illustrious"
+        ? buildIllustriousWorkflow(input)
+        : architecture === "anima"
+          ? buildAnimaWorkflow(input)
+          : buildWorkflow(workflowTemplate, input);
+      const result = await comfy().submit(graph, clientId, "low") as { prompt_id: string };
       nextPromptIds.push(result.prompt_id);
     }
     const globalPrompts = prompts.map(item => ({ ...item, index: currentGenerated + item.index }));
@@ -880,6 +1003,90 @@ app.post("/api/datasets/:id/export", (q, r) => {
     r.json({ path: result.exportDirectory, summary: result.manifest.summary });
   } catch (error) { r.status(400).json({ error: simplify(error) }); }
 });
+/** Inspect master PNG / gallery for model + LoRA stack (Dataset Builder preview). Soft-fail safe. */
+app.post("/api/datasets/inspect-master", photoUpload.single("master"), async (q, r) => {
+  const file = q.file;
+  try {
+    const bodyPath = String(q.body?.masterReference || q.body?.path || "").trim();
+    // Soft validation for inspect: do not require ffprobe (desktop PNGs must still work offline).
+    if (file) {
+      const ext = path.extname(file.originalname || file.filename).toLowerCase();
+      if (!imageExtensions.has(ext)) throw new Error("Master image must be PNG, JPEG, or WebP.");
+      if (!fs.existsSync(file.path)) throw new Error("Uploaded master image was not saved.");
+    }
+    const relative = file ? `z-image-studio/${file.filename}` : bodyPath;
+    if (!file && (!relative || path.isAbsolute(relative) || relative.includes(".."))) {
+      throw new Error("Provide a master image upload or a Studio input path.");
+    }
+
+    let availableModels: string[] = [];
+    let availableLoras: string[] = [];
+    let comfyOk = true;
+    try {
+      const info: any = await comfy().objectInfo();
+      availableModels = [
+        ...(info.UNETLoader?.input?.required?.unet_name?.[0] || []),
+        ...(info.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0] || [])
+      ];
+      availableLoras = [
+        ...(info.LoraLoaderModelOnly?.input?.required?.lora_name?.[0] || []),
+        ...(info.LoraLoader?.input?.required?.lora_name?.[0] || [])
+      ];
+    } catch {
+      comfyOk = false;
+      // Back-compat offline: still parse PNG/gallery; user can pick model/LoRAs manually.
+      availableModels = modelsFromLocalFallback();
+      availableLoras = lorasFromLocalFallback();
+    }
+
+    let requestedLoras: Array<{ name: string; strength: number }> = [];
+    try {
+      requestedLoras = typeof q.body?.loras === "string" ? JSON.parse(q.body.loras) : (q.body?.loras || []);
+      if (!Array.isArray(requestedLoras)) requestedLoras = [];
+    } catch {
+      requestedLoras = [];
+    }
+
+    const stack = resolveMasterGenerationStack({
+      masterDiskPath: file?.path,
+      masterRelative: relative,
+      originalFilename: file?.originalname,
+      requestedModel: String(q.body?.model || ""),
+      requestedLoras,
+      availableModels,
+      availableLoras
+    });
+
+    r.json({
+      model: stack.model,
+      loras: stack.loras,
+      detectedLoras: stack.detectedLoras,
+      matchedFromMaster: stack.matchedFromMaster,
+      sources: stack.sources,
+      unmatchedLoras: stack.unmatchedLoras,
+      note: stack.note,
+      masterReference: relative,
+      originalFilename: file?.originalname || path.basename(relative),
+      comfyConnected: comfyOk,
+      warning: comfyOk
+        ? undefined
+        : "ComfyUI was not reachable while inspecting. Model/LoRA lists may be incomplete — confirm the picker below before building."
+    });
+  } catch (error: any) {
+    // Soft error payload so the UI can fall back to manual model/LoRA pickers.
+    r.status(200).json({
+      model: String(q.body?.model || "") || undefined,
+      loras: [],
+      detectedLoras: [],
+      matchedFromMaster: false,
+      sources: [],
+      unmatchedLoras: [],
+      note: "Could not fully inspect this master — pick model and LoRAs manually.",
+      error: error?.issues?.[0]?.message || simplify(error),
+      softFail: true
+    });
+  }
+});
 app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
   const file = q.file;
   try {
@@ -887,7 +1094,8 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
     const rawConfig = JSON.parse(String(q.body.config || "{}"));
     const config = datasetSchema.parse({
       ...rawConfig, count: Number(rawConfig.count), width: Number(rawConfig.width),
-      height: Number(rawConfig.height), seed: Number(rawConfig.seed)
+      height: Number(rawConfig.height), seed: Number(rawConfig.seed),
+      loras: Array.isArray(rawConfig.loras) ? rawConfig.loras : []
     });
     const characterProfile = config.characterProfileId ? characterProfiles.get(config.characterProfileId) : undefined;
     if (config.characterProfileId && !characterProfile) throw new Error("The selected character profile no longer exists.");
@@ -896,33 +1104,105 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
     if (!file && (!profileReference || path.isAbsolute(profileReference) || profileReference.includes(".."))) {
       throw new Error("Choose a master image, or select a character profile with a saved Studio reference image.");
     }
-    const architecture = modelArchitecture(config.model);
-    if (architecture === "unknown") throw new Error("This image model is not supported by Dataset Builder.");
-    const profile = architecture === "krea2" ? krea2 : settings;
-    const info: any = await comfy().objectInfo();
-    const availableModels: string[] = info.UNETLoader?.input?.required?.unet_name?.[0] || [];
-    if (!availableModels.includes(config.model)) throw new Error(`Image model is not available: ${config.model}`);
-    if (architecture === "krea2") {
-      const loras: string[] = info.LoraLoaderModelOnly?.input?.required?.lora_name?.[0] || [];
-      if (!loras.includes(KREA_REFERENCE_FILES.identityLora)) throw new Error(`Krea identity adapter is missing: ${KREA_REFERENCE_FILES.identityLora}`);
-    }
-    const id = crypto.randomUUID();
-    const prompts = datasetPrompts(config);
     const referenceImage = file ? `z-image-studio/${file.filename}` : profileReference;
+    const info: any = await comfy().objectInfo();
+    const availableModels: string[] = [
+      ...(info.UNETLoader?.input?.required?.unet_name?.[0] || []),
+      ...(info.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0] || [])
+    ];
+    const availableLoras: string[] = [
+      ...(info.LoraLoaderModelOnly?.input?.required?.lora_name?.[0] || []),
+      ...(info.LoraLoader?.input?.required?.lora_name?.[0] || [])
+    ];
+    const stack = resolveMasterGenerationStack({
+      masterDiskPath: file?.path,
+      masterRelative: referenceImage,
+      originalFilename: file?.originalname,
+      requestedModel: config.model,
+      requestedLoras: config.loras,
+      availableModels,
+      availableLoras
+    });
+    const resolvedModel = stack.model || config.model;
+    const modelOk =
+      availableModels.includes(resolvedModel) ||
+      Boolean(matchModelFilename(resolvedModel, availableModels));
+    if (!resolvedModel || !modelOk) {
+      throw new Error(`Image model is not available: ${resolvedModel || config.model}. Pick an installed model in Dataset Builder.`);
+    }
+    // Back-compat: skip missing LoRAs with a warning instead of hard-failing the whole dataset.
+    const unmatchedNote = stack.unmatchedLoras.length
+      ? `Skipped unavailable LoRAs: ${stack.unmatchedLoras.join(", ")}.`
+      : "";
+    const architecture = modelArchitecture(resolvedModel);
+    if (architecture === "unknown") throw new Error("This image model is not supported by Dataset Builder.");
+    const profile = architecture === "krea2" ? krea2 : architecture === "illustrious"
+      ? { textEncoder: "checkpoint", vae: "checkpoint" }
+      : architecture === "anima"
+        ? anima
+        : settings;
+    if (architecture === "krea2") {
+      const kreaLoras: string[] = info.LoraLoaderModelOnly?.input?.required?.lora_name?.[0] || [];
+      if (!kreaLoras.includes(KREA_REFERENCE_FILES.identityLora)) throw new Error(`Krea identity adapter is missing: ${KREA_REFERENCE_FILES.identityLora}`);
+    }
+    // Apply every matched/installed LoRA the user picked (or the master carried). Do NOT silently
+    // drop by architecture: that made explicit picks vanish and the run report "no LoRAs" — the bug
+    // this fixes. A verified LoRA whose registered architecture differs from the resolved model is
+    // still applied, but flagged in the record warning so the user can re-verify if results look off.
+    const registeredLoras = loraRegistry.list(availableLoras);
+    const requiredFamily = architecture;
+    const stackLoras = stack.loras;
+    const mismatchedLoras = stackLoras
+      .filter(lora => {
+        const reg = registeredLoras.find(item => item.filename === lora.name);
+        return Boolean(reg?.verified && reg.architecture && reg.architecture !== requiredFamily && reg.architecture !== "unknown");
+      })
+      .map(lora => lora.name);
+    const configWithStack = {
+      ...config,
+      model: resolvedModel,
+      loras: stackLoras,
+      stackMatchedFromMaster: stack.matchedFromMaster
+    };
+    const id = crypto.randomUUID();
+    // Captions come only from datasetPrompts (list + form basePrompt). Master PNG is never a text source.
+    // resolveMasterGenerationStack only supplies model + LoRA names/strengths from metadata.
+    const prompts = datasetPrompts(configWithStack);
     const clientId = crypto.randomUUID();
     const outputSlug = datasetOutputSlug(config.name || config.trigger, id);
     const promptIds: string[] = [];
+    const datasetNegative = config.datasetMode === "instagram-ugc"
+      ? "different person, changed identity, male, group photo, crowd, deformed face, malformed hands, extra limbs, fused fingers, blurry face, heavy beauty filter, watermark, text overlay, logo, low resolution"
+      : "different person, changed identity, duplicate person, repeated generic pose, static pose, same camera framing, distorted face, malformed hands";
+    const identityStrength = datasetIdentityReferenceStrength(architecture, config.datasetMode);
     for (const item of prompts) {
+      let promptText = item.caption;
+      try {
+        promptText = applyLoraActivations(promptText, stackLoras, registeredLoras);
+      } catch { /* keep caption */ }
       const input = generationSchema.parse({
-        prompt: item.caption, negativePrompt: "different person, changed identity, duplicate person, repeated generic pose, static pose, same camera framing, distorted face, malformed hands",
+        prompt: promptText, negativePrompt: datasetNegative,
         width: config.width, height: config.height, seed: item.seed,
-        steps: architecture === "krea2" ? 8 : 9, guidance: 1, batchSize: 1,
-        priority: "low", outputFormat: "png", sampler: "res_multistep", scheduler: "simple",
+        steps: architecture === "krea2" ? 8 : architecture === "illustrious" ? 28 : 9,
+        guidance: architecture === "illustrious" ? 4 : 1,
+        batchSize: 1,
+        priority: "low", outputFormat: "png",
+        sampler: architecture === "illustrious" ? "dpmpp_sde" : "res_multistep",
+        scheduler: architecture === "illustrious" ? "karras" : "simple",
         outputName: datasetOutputName(outputSlug, item.index + 1),
-        diffusionModel: config.model, textEncoder: profile.textEncoder, vae: profile.vae,
-        loras: [], references: [{ image: referenceImage, mode: "direct", strength: architecture === "krea2" ? 1.15 : 0.8 }]
+        diffusionModel: resolvedModel,
+        textEncoder: profile.textEncoder,
+        vae: profile.vae,
+        loras: stackLoras,
+        // Identity lock only — do not use high strength that freezes master pose/outfit.
+        references: [{ image: referenceImage, mode: "direct", strength: identityStrength }]
       });
-      const result = await comfy().submit(buildWorkflow(workflowTemplate, input), clientId, "low") as { prompt_id: string };
+      const graph = architecture === "illustrious"
+        ? buildIllustriousWorkflow(input)
+        : architecture === "anima"
+          ? buildAnimaWorkflow(input)
+          : buildWorkflow(workflowTemplate, input);
+      const result = await comfy().submit(graph, clientId, "low") as { prompt_id: string };
       promptIds.push(result.prompt_id);
     }
     const datasetDirectory = resolveInside(datasetsRoot, id);
@@ -932,9 +1212,26 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
       started: Date.now(), referenceImage, promptIds, completedPromptIds: [], failedPromptIds: [], promptErrors: {},
       images: [], captions: prompts.map(item => item.caption), captionByImage: {},
       promptPlan: prompts,
-      architecture, warning: architecture === "z-image" ? "Z-Image uses structural guidance; Krea 2 Identity mode gives stronger one-image identity retention." : "",
-      ...config,
-      outputSlug
+      architecture,
+      steps: architecture === "krea2" ? 8 : architecture === "illustrious" ? 28 : 9,
+      guidance: architecture === "illustrious" ? 4 : 1,
+      sampler: architecture === "illustrious" ? "dpmpp_sde" : "res_multistep",
+      scheduler: architecture === "illustrious" ? "karras" : "simple",
+      textEncoder: profile.textEncoder,
+      vae: profile.vae,
+      warning: [
+        stack.matchedFromMaster
+          ? `Master stack matched: ${stack.note}.`
+          : `Master stack partial/manual — using selected model${stackLoras.length ? ` + ${stackLoras.length} LoRA(s)` : " (no LoRAs)"}. Add LoRAs in Dataset Builder if the master had none in metadata.`,
+        unmatchedNote,
+        mismatchedLoras.length ? `LoRA architecture mismatch (applied anyway): ${mismatchedLoras.join(", ")} — model resolved as ${requiredFamily}. Re-verify in LoRA Manager if results look off.` : "",
+        architecture === "z-image" ? "Z-Image uses structural guidance; Krea 2 Identity mode gives stronger one-image identity retention." : "",
+        config.datasetMode === "instagram-ugc" ? "Instagram UGC mode: fixed 40-shot lifestyle list. Review outfits and anatomy before LoRA Lab." : ""
+      ].filter(Boolean).join(" "),
+      ...configWithStack,
+      outputSlug,
+      stackNote: stack.note,
+      stackSources: stack.sources
     };
     datasetRecords.unshift(record);
     persistDatasets();
@@ -1305,6 +1602,221 @@ function finishGeneration(record: any, outcome: GenerationOutcome) {
   broadcast({ type: "record", record });
 }
 
+type MasterStack = {
+  model?: string;
+  loras: Array<{ name: string; strength: number }>;
+  /** LoRAs detected from metadata before availability filtering (for UI). */
+  detectedLoras: Array<{ name: string; strength: number }>;
+  matchedFromMaster: boolean;
+  sources: string[];
+  unmatchedLoras: string[];
+  note: string;
+};
+
+function modelsFromLocalFallback(): string[] {
+  const names = new Set<string>();
+  for (const dir of [root, path.join(root, "checkpoints"), path.join(root, "ComfyUI", "models", "diffusion_models"), path.join(root, "ComfyUI", "models", "checkpoints")]) {
+    try {
+      for (const name of fs.readdirSync(dir)) {
+        if (/\.safetensors$/i.test(name)) names.add(name);
+      }
+    } catch { /* skip */ }
+  }
+  return [...names];
+}
+
+function lorasFromLocalFallback(): string[] {
+  const names = new Set<string>();
+  for (const dir of [path.join(root, "lora"), path.join(root, "ComfyUI", "models", "loras")]) {
+    try {
+      for (const name of fs.readdirSync(dir)) {
+        if (/\.safetensors$/i.test(name)) names.add(name);
+      }
+    } catch { /* skip */ }
+  }
+  return [...names];
+}
+
+/** Resolve Comfy input-relative paths like z-image-studio/foo.png to disk. */
+function resolveComfyInputRelative(relative: string): string | undefined {
+  const clean = String(relative || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!clean || clean.includes("..") || path.isAbsolute(clean)) return undefined;
+  const full = path.join(root, "ComfyUI", "input", clean);
+  return fs.existsSync(full) ? full : undefined;
+}
+
+/** Find gallery generation stack by output filename basename. */
+function findGalleryStackByImageName(filename: string): { model?: string; loras: Array<{ name: string; strength: number }>; recordId?: string } | null {
+  const base = path.basename(filename || "");
+  if (!base) return null;
+  for (const rec of records) {
+    const images = Array.isArray(rec.images) ? rec.images : [];
+    const hit = images.find((img: any) => path.basename(String(img?.filename || "")) === base);
+    if (!hit) continue;
+    const loras = Array.isArray(rec.loras)
+      ? rec.loras
+          .filter((item: any) => item?.name)
+          .map((item: any) => ({ name: String(item.name), strength: Number(item.strength) || 1 }))
+      : [];
+    return {
+      model: String(rec.diffusionModel || rec.model || "") || undefined,
+      loras,
+      recordId: String(rec.id || "")
+    };
+  }
+  return null;
+}
+
+/**
+ * Match dataset generation stack to the master image:
+ * 1) Gallery record for that filename (model + LoRAs as generated)
+ * 2) PNG A1111 parameters / Comment metadata (Model + <lora:…> only — NOT the positive prompt text)
+ * 3) Explicit config model/loras as fallback
+ * originalFilename: browser name before multer UUID rename (e.g. z-image_00240_.png)
+ *
+ * Intentionally ignores the master's positive prompt / scene text so dataset captions
+ * stay list + character description only.
+ */
+function resolveMasterGenerationStack(options: {
+  masterDiskPath?: string;
+  masterRelative?: string;
+  originalFilename?: string;
+  requestedModel?: string;
+  requestedLoras?: Array<{ name: string; strength: number }>;
+  availableModels: string[];
+  availableLoras: string[];
+}): MasterStack {
+  const sources: string[] = [];
+  let modelHint = options.requestedModel;
+  // Form/manual picks start the list; master PNG + gallery merge in below (master wins on strength for same name).
+  const formLoras = Array.isArray(options.requestedLoras) ? [...options.requestedLoras] : [];
+  let masterLoras: Array<{ name: string; strength: number }> = [];
+
+  // Prefer original browser filename for gallery lookup (uploads are renamed to UUID.png).
+  const galleryCandidates = [
+    options.originalFilename,
+    options.masterRelative,
+    options.masterDiskPath
+  ].filter(Boolean).map(item => path.basename(String(item)));
+
+  let gallery: ReturnType<typeof findGalleryStackByImageName> = null;
+  for (const name of galleryCandidates) {
+    gallery = findGalleryStackByImageName(name);
+    if (gallery?.model || gallery?.loras?.length) break;
+  }
+  if (gallery?.model || gallery?.loras?.length) {
+    if (gallery.model) {
+      modelHint = gallery.model;
+      sources.push(`gallery model (${gallery.recordId || "record"})`);
+    }
+    if (gallery.loras.length) {
+      masterLoras = gallery.loras;
+      sources.push(`gallery LoRAs ×${gallery.loras.length}`);
+    }
+  }
+
+  const pngPath =
+    (options.masterDiskPath && fs.existsSync(options.masterDiskPath) ? options.masterDiskPath : undefined) ||
+    (options.masterRelative ? resolveComfyInputRelative(options.masterRelative) : undefined);
+  if (pngPath) {
+    const parsed = readGenerationMetaFromPng(pngPath);
+    if (parsed.model) {
+      // Master PNG model is authoritative when present (dataset must match the master render stack).
+      modelHint = parsed.model;
+      if (!sources.some(s => /PNG Model/i.test(s))) sources.push("PNG Model metadata");
+    }
+    if (parsed.loras.length) {
+      // PNG LoRAs are authoritative when gallery didn't supply any; if gallery did, keep gallery.
+      if (!masterLoras.length) {
+        masterLoras = parsed.loras;
+        sources.push(`PNG LoRA tags ×${parsed.loras.length}`);
+      }
+    }
+  }
+
+  // Merge: master LoRAs first, then form-only extras (manual add in Dataset Builder).
+  const loraMap = new Map<string, { name: string; strength: number }>();
+  const keyOf = (n: string) => path.basename(n).replace(/\.safetensors$/i, "").toLowerCase();
+  for (const lora of masterLoras) loraMap.set(keyOf(lora.name), lora);
+  for (const lora of formLoras) {
+    const k = keyOf(lora.name);
+    if (!loraMap.has(k)) loraMap.set(k, lora);
+  }
+  const loraHints = [...loraMap.values()];
+  if (formLoras.length && masterLoras.length) sources.push("merged form LoRAs");
+  else if (formLoras.length && !masterLoras.length) sources.push("form LoRAs");
+
+  const availableModels = options.availableModels.length ? options.availableModels : modelsFromLocalFallback();
+  const availableLoras = options.availableLoras.length ? options.availableLoras : lorasFromLocalFallback();
+
+  const matchedModel =
+    matchModelFilename(modelHint, availableModels) ||
+    (options.requestedModel && matchModelFilename(options.requestedModel, availableModels)) ||
+    options.requestedModel ||
+    modelHint;
+
+  const loraMatch = matchLoraFilenames(loraHints, availableLoras);
+  const unmatchedLoras = loraMatch.filter(item => !item.matched).map(item => item.requestedName);
+  // When Comfy list is empty, keep detected names so the UI can still show them for manual confirm.
+  const loras = (availableLoras.length
+    ? loraMatch.filter(item => item.matched)
+    : loraMatch
+  ).map(item => ({ name: item.name, strength: item.strength }));
+
+  const matchedFromMaster = sources.some(s => /gallery|PNG/i.test(s));
+  const noteParts = [
+    matchedModel ? `model ${String(matchedModel).replace(/\.safetensors$/i, "")}` : "model not resolved from master",
+    loras.length ? `${loras.length} LoRA${loras.length === 1 ? "" : "s"}` : "no LoRAs",
+    sources.length ? `via ${sources.join(" + ")}` : "using form defaults (add LoRAs below if needed)"
+  ];
+  if (unmatchedLoras.length && availableLoras.length) {
+    noteParts.push(`${unmatchedLoras.length} LoRA(s) not found in Comfy — add or install them`);
+  }
+
+  return {
+    model: matchedModel,
+    loras,
+    detectedLoras: loraHints,
+    matchedFromMaster,
+    sources,
+    unmatchedLoras,
+    note: noteParts.join(" · ")
+  };
+}
+
+function embedCivitaiMetadataForDatasetImage(record: any, imagePath: string, caption: string, seed?: number) {
+  if (!/\.png$/i.test(imagePath) || !fs.existsSync(imagePath)) return false;
+  const modelName = String(record.model || record.diffusionModel || "");
+  const catalog = modelCatalog.find((item: any) => item.filename === modelName);
+  const knownLoras: Record<string, string> = {};
+  for (const lora of Array.isArray(record.loras) ? record.loras : []) {
+    const reg = loraRegistry.list().find(item => item.filename.toLowerCase() === String(lora.name).toLowerCase());
+    if (reg?.sha256) knownLoras[lora.name] = reg.sha256;
+  }
+  const hashes = collectResourceHashes(root, {
+    diffusionModel: modelName,
+    vae: record.vae,
+    loras: record.loras
+  }, { model: catalog?.sha256, loras: knownLoras });
+  return embedCivitaiMetadataInPngFile(imagePath, {
+    prompt: caption,
+    negativePrompt: record.datasetMode === "instagram-ugc"
+      ? "different person, changed identity, malformed hands"
+      : "different person, changed identity",
+    width: record.width,
+    height: record.height,
+    seed: seed ?? record.seed,
+    steps: record.steps || (record.architecture === "krea2" ? 8 : 9),
+    guidance: record.guidance ?? 1,
+    sampler: record.sampler || "res_multistep",
+    scheduler: record.scheduler || "simple",
+    diffusionModel: modelName,
+    vae: record.vae,
+    textEncoder: record.textEncoder,
+    loras: record.loras
+  }, hashes);
+}
+
 /**
  * Write Civitai-friendly PNG text metadata into completed image files.
  * Leaves ComfyUI workflow "prompt" chunks intact; adds/replaces "parameters".
@@ -1509,6 +2021,69 @@ async function runMusubiTraining(record: any, config: any, datasetConfig: string
     broadcast({ type: "training", record });
   } finally { activeTrainingProcess = undefined; }
 }
+const DATASET_STOP_ERROR = "Stopped by user. Completed images were kept; remaining queue items were cancelled.";
+
+function finalizeDatasetRecord(record: any, options?: { stopped?: boolean }) {
+  record.completedPromptIds ||= [];
+  record.failedPromptIds ||= [];
+  record.promptIds ||= [];
+  record.images ||= [];
+  const terminalCount = record.completedPromptIds.length + record.failedPromptIds.length;
+  record.progress = record.promptIds.length
+    ? Math.round((terminalCount / record.promptIds.length) * 100)
+    : 100;
+  const failureCount = record.failedPromptIds.length;
+  if (record.images.length) {
+    record.status = "completed";
+    if (options?.stopped) {
+      record.phase = `Stopped · ${record.images.length} image${record.images.length === 1 ? "" : "s"} saved`;
+      record.warning = `${record.images.length} completed image${record.images.length === 1 ? "" : "s"} kept. Remaining jobs were cancelled; review what you have or generate more.`;
+      record.error = undefined;
+    } else {
+      record.phase = failureCount
+        ? `Ready for review · ${failureCount} image${failureCount === 1 ? "" : "s"} failed`
+        : "Ready for LoRA training";
+      record.warning = failureCount
+        ? `${failureCount} image${failureCount === 1 ? "" : "s"} could not be generated. The ${record.images.length} completed images were preserved; review them or generate replacements.`
+        : record.warning || "";
+    }
+    try {
+      const directory = resolveInside(datasetsRoot, String(record.id));
+      const review = loadReview(directory, record);
+      saveReview(directory, review);
+    } catch { /* review can be rebuilt later */ }
+  } else {
+    record.status = options?.stopped ? "cancelled" : "failed";
+    record.phase = options?.stopped ? "Stopped before any images finished" : "No images completed";
+    record.error = options?.stopped
+      ? DATASET_STOP_ERROR
+      : `${failureCount || record.promptIds.length} dataset images failed.`;
+  }
+  record.durationMs = Date.now() - (record.started || Date.now());
+}
+
+function stopDatasetMonitor(datasetId: string) {
+  activeDatasetMonitors.delete(datasetId);
+}
+
+async function cancelDatasetComfyJobs(record: any) {
+  record.completedPromptIds ||= [];
+  record.failedPromptIds ||= [];
+  record.promptErrors ||= {};
+  const remaining = (record.promptIds || []).filter(
+    (id: string) => !record.completedPromptIds.includes(id) && !record.failedPromptIds.includes(id)
+  );
+  for (const promptId of remaining) {
+    try { await comfy().deleteQueued(promptId); } catch { /* may already be gone or running */ }
+    if (!record.failedPromptIds.includes(promptId)) {
+      record.failedPromptIds.push(promptId);
+      record.promptErrors[promptId] = DATASET_STOP_ERROR;
+    }
+  }
+  try { await comfy().interrupt(); } catch { /* idle is fine */ }
+  return remaining.length;
+}
+
 function monitorDataset(record: any) {
   if (activeDatasetMonitors.has(record.id)) return;
   activeDatasetMonitors.add(record.id);
@@ -1516,10 +2091,15 @@ function monitorDataset(record: any) {
   let reconnectAttempts = 0;
   const stop = () => {
     clearInterval(timer);
-    activeDatasetMonitors.delete(record.id);
+    stopDatasetMonitor(record.id);
   };
   const timer = setInterval(async () => {
     if (checking) return;
+    // Terminal or user-stop: never overwrite completed/cancelled/failed records.
+    if (["cancelled", "completed", "failed"].includes(String(record.status)) || record._stopRequested) {
+      stop();
+      return;
+    }
     checking = true;
     try {
       record.completedPromptIds ||= [];
@@ -1528,6 +2108,7 @@ function monitorDataset(record: any) {
       record.captionByImage ||= {};
       let reachedComfy = false;
       for (let index = 0; index < record.promptIds.length; index++) {
+        if (record._stopRequested || ["cancelled", "completed", "failed"].includes(String(record.status))) break;
         const promptId = record.promptIds[index];
         if (record.completedPromptIds.includes(promptId) || record.failedPromptIds.includes(promptId)) continue;
         const response: any = await comfy().history(promptId);
@@ -1558,38 +2139,44 @@ function monitorDataset(record: any) {
         if (settings.pruneRawDatasetOutputs) try { fs.unlinkSync(source); } catch {}
         const caption = datasetCaptionForPrompt(record, index);
         fs.writeFileSync(resolveInside(imageDirectory, `${String(index + 1).padStart(3, "0")}.txt`), caption, "utf8");
+        // Embed model + LoRA metadata into dataset PNG (same stack as master / generation).
+        try {
+          const plannedSeed = record.promptPlan?.find((item: any) => item.index === index)?.seed;
+          embedCivitaiMetadataForDatasetImage(record, target, caption, plannedSeed);
+          // Also stamp the raw Comfy output when still present.
+          if (fs.existsSync(source)) embedCivitaiMetadataForDatasetImage(record, source, caption, plannedSeed);
+        } catch (error) {
+          recentErrors.unshift(`Dataset metadata (${name}): ${simplify(error)}`);
+        }
         if (!record.images.includes(name)) record.images.push(name);
         record.captionByImage[name] = caption;
         record.completedPromptIds.push(promptId);
+      }
+      if (record._stopRequested) {
+        stop();
+        return;
       }
       if (reachedComfy) {
         reconnectAttempts = 0;
         record.status = "active";
         record.error = undefined;
-        record.phase = "Generating consistent character views";
+        record.phase = record.datasetMode === "instagram-ugc"
+          ? "Generating Instagram UGC views"
+          : "Generating consistent character views";
       }
       const terminalCount = record.completedPromptIds.length + record.failedPromptIds.length;
       record.progress = Math.round((terminalCount / record.promptIds.length) * 100);
       if (terminalCount === record.promptIds.length) {
-        const failureCount = record.failedPromptIds.length;
-        if (record.images.length) {
-          record.status = "completed";
-          record.phase = failureCount ? `Ready for review · ${failureCount} image${failureCount === 1 ? "" : "s"} failed` : "Ready for LoRA training";
-          record.warning = failureCount ? `${failureCount} image${failureCount === 1 ? "" : "s"} could not be generated. The ${record.images.length} completed images were preserved; review them or generate replacements.` : "";
-          const directory = resolveInside(datasetsRoot, String(record.id));
-          const review = loadReview(directory, record);
-          saveReview(directory, review);
-        } else {
-          record.status = "failed";
-          record.phase = "No images completed";
-          record.error = `${failureCount || record.promptIds.length} dataset images failed.`;
-        }
-        record.durationMs = Date.now() - record.started;
+        finalizeDatasetRecord(record);
         stop();
       }
       persistDatasets();
       broadcast({ type: "dataset", record });
     } catch (error) {
+      if (record._stopRequested) {
+        stop();
+        return;
+      }
       reconnectAttempts++;
       record.status = "paused";
       record.phase = "Waiting for the local image engine";

@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { datasetCaptionForPrompt, datasetExtensionSchema, datasetPrompts, datasetSchema, DEFAULT_POSE_SEQUENCE } from "./dataset.js";
+import path from "node:path";
+import {
+  composeInstagramDatasetCaption,
+  datasetCaptionForPrompt,
+  datasetExtensionSchema,
+  datasetIdentityReferenceStrength,
+  datasetPrompts,
+  datasetSchema,
+  DEFAULT_POSE_SEQUENCE,
+  getInstagramUgcShotCount,
+  getInstagramUgcShots
+} from "./dataset.js";
+
+const projectRoot = path.resolve(process.cwd(), "..");
 
 describe("Dataset Builder", () => {
   it("creates forty deterministic labelled character views", () => {
@@ -69,6 +82,68 @@ describe("Dataset Builder", () => {
     expect(datasetExtensionSchema.parse({ count: 40 }).count).toBe(40);
     expect(() => datasetExtensionSchema.parse({ count: 41 })).toThrow();
   });
+  it("builds Instagram UGC mode from the editable 40-prompt JSON list in order", () => {
+    const shots = getInstagramUgcShots(projectRoot);
+    expect(getInstagramUgcShotCount(projectRoot)).toBe(40);
+    expect(shots[0]).toMatch(/Raw photo/i);
+    expect(shots[0]).toMatch(/lili doe/i);
+    expect(shots[39]).toMatch(/full frontal/i);
+    const liliDesc =
+      "lili doe, a young woman in her early twenties with the soft freckled doe-eyed look of a Belle Delphine-inspired Instagram model, large brown doe eyes, soft pouty lips, delicate freckles across pale cheeks and nose, long soft dark brown curly hair falling in loose waves over her shoulders and down her back, slender waist, large perfectly rounded curvy ass, C-cup breasts, natural skin texture with visible pores and freckles, playful teasing expression that shifts between innocent “hi” smiles and subtle flirty pouts";
+    const input = datasetSchema.parse({
+      name: "IG UGC Set", trigger: "lili doe", model: "krea2Turbo.safetensors",
+      basePrompt: liliDesc, count: 40, width: 512, height: 768, seed: 10,
+      datasetMode: "instagram-ugc", promptOrder: "sequential", projectRoot
+    });
+    const prompts = datasetPrompts(input);
+    expect(prompts).toHaveLength(40);
+    // One unique full prompt per image, sequential list indices 0..39
+    expect(prompts.map(p => p.listIndex)).toEqual(Array.from({ length: 40 }, (_, i) => i));
+    expect(new Set(prompts.map(p => p.caption)).size).toBe(40);
+    expect(prompts[0].caption).toContain("mirror selfie");
+    expect(prompts[0].caption).toMatch(/Raw photo/i);
+    expect((prompts[0].tags as Record<string, string>).mode).toBe("instagram-ugc");
+    expect((prompts[0].tags as Record<string, string>).order).toBe("sequential");
+    expect(prompts.some(item => item.tags.framing === "close-up headshot")).toBe(true);
+    expect(prompts.some(item => item.tags.framing === "full-body view")).toBe(true);
+
+    // Structure: first half = list prompt, second half = character features
+    for (const item of prompts) {
+      const caption = item.caption;
+      const marker = "character features:";
+      expect(caption.includes(marker)).toBe(true);
+      const [listPart, characterPart] = caption.split(marker);
+      expect(listPart.toLowerCase()).toContain("raw photo");
+      expect(characterPart.toLowerCase()).toContain("lili doe");
+      expect(characterPart.toLowerCase()).toContain("c-cup");
+      expect(characterPart.toLowerCase()).toContain("curvy ass");
+      // List half comes first
+      expect(caption.indexOf("Raw photo")).toBeLessThan(caption.indexOf(marker));
+      // Character half is after the list prompt
+      expect(caption.indexOf(marker)).toBeGreaterThan(listPart.length - 1);
+    }
+    // Different shots still share the same character half
+    expect(prompts[0].characterHalf).toBe(prompts[15].characterHalf);
+    expect(prompts[0].listHalf).not.toBe(prompts[15].listHalf);
+  });
+  it("continues Instagram list slots when a UGC dataset is extended", () => {
+    const shots = getInstagramUgcShots(projectRoot);
+    const base = datasetSchema.parse({
+      name: "IG Extend", trigger: "lili doe", model: "krea2.safetensors",
+      basePrompt: "same woman", count: 12, width: 512, height: 768, seed: 5,
+      datasetMode: "instagram-ugc", promptOrder: "sequential", projectRoot
+    });
+    const first = datasetPrompts(base);
+    const more = datasetPrompts({ ...base, count: 3, seed: 17, variationOffset: 12 });
+    expect(more[0].variationSlot).toBe(12);
+    expect(more[0].listIndex).toBe(12);
+    expect(more[0].caption).toContain(shots[12].slice(0, 40));
+    expect(more[0].listIndex).not.toBe(first[0].listIndex);
+    const wrap = datasetPrompts({ ...base, count: 1, seed: 45, variationOffset: 40 });
+    expect(wrap[0].variationSlot).toBe(40);
+    expect(wrap[0].listIndex).toBe(0);
+    expect(wrap[0].caption).toContain("alternate Instagram pass");
+  });
   it("keeps prompt captions aligned after a generated image is deleted", () => {
     const record = {
       captions: ["first", "second"],
@@ -82,5 +157,28 @@ describe("Dataset Builder", () => {
     record.captions.splice(0, 1);
     expect(datasetCaptionForPrompt(record, 2)).toBe("recovery caption");
     expect(typeof datasetCaptionForPrompt({ captions: [], trigger: "zperson" }, 9)).toBe("string");
+  });
+  it("never mixes a master PNG positive prompt into dataset captions", () => {
+    const masterPositive =
+      "master only scene with red sports car under neon, unique_master_token_xyz, cyberpunk alley";
+    const listPrompt =
+      "Raw photo, grainy iPhone, mirror selfie in bedroom, black bikini top fully covering, no nudity";
+    const character = "lili doe, freckles, long curly brown hair, C-cup, playful expression";
+    const { caption, listHalf, characterHalf } = composeInstagramDatasetCaption({
+      listPrompt,
+      characterFeatures: character,
+      trigger: "lili doe"
+    });
+    expect(caption).not.toContain("unique_master_token_xyz");
+    expect(caption).not.toContain("red sports car");
+    expect(caption).not.toContain(masterPositive);
+    expect(listHalf).toContain("mirror selfie");
+    expect(characterHalf).toContain("character features:");
+    expect(characterHalf).toContain("freckles");
+    // Identity ref for IG is lower than legacy 1.15 so list pose/outfit can win
+    expect(datasetIdentityReferenceStrength("krea2", "instagram-ugc")).toBeLessThan(1);
+    expect(datasetIdentityReferenceStrength("krea2", "instagram-ugc")).toBe(0.72);
+    expect(datasetIdentityReferenceStrength("krea2", "standard")).toBe(0.85);
+    expect(datasetIdentityReferenceStrength("z-image", "instagram-ugc")).toBe(0.55);
   });
 });

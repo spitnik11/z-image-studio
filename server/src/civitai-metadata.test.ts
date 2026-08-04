@@ -6,6 +6,9 @@ import {
   buildA1111Parameters,
   embedCivitaiMetadataInPngFile,
   injectPngTextMetadata,
+  matchLoraFilenames,
+  matchModelFilename,
+  parseA1111Parameters,
   readPngTextMetadata,
   stripSafetensorsExt
 } from "./civitai-metadata.js";
@@ -112,5 +115,28 @@ describe("civitai A1111 metadata", () => {
     expect(meta.parameters).toContain("Model: model");
     expect(meta.parameters).toContain("DPM++ SDE Karras");
     expect(stripSafetensorsExt("x.safetensors")).toBe("x");
+  });
+
+  it("parses model and LoRAs from A1111 parameters for master-stack matching", () => {
+    const text = [
+      "a woman, <lora:Cutifier:0.8>, <lora:Krea2-realism-V2:0.65>",
+      "Negative prompt: blur",
+      "Steps: 8, Sampler: Euler, CFG scale: 1, Seed: 12, Size: 512x768, Model hash: AABBCCDDEE, Model: krea2TurboINT8ConvrotWorks_krea2TurboInt8, Version: Z-Image Studio"
+    ].join("\n");
+    const parsed = parseA1111Parameters(text);
+    expect(parsed.model).toBe("krea2TurboINT8ConvrotWorks_krea2TurboInt8.safetensors");
+    expect(parsed.loras).toEqual([
+      { name: "Cutifier.safetensors", strength: 0.8 },
+      { name: "Krea2-realism-V2.safetensors", strength: 0.65 }
+    ]);
+    expect(parsed.steps).toBe(8);
+    expect(parsed.width).toBe(512);
+    const model = matchModelFilename(parsed.model, [
+      "other.safetensors",
+      "krea2TurboINT8ConvrotWorks_krea2TurboInt8.safetensors"
+    ]);
+    expect(model).toBe("krea2TurboINT8ConvrotWorks_krea2TurboInt8.safetensors");
+    const loras = matchLoraFilenames(parsed.loras, ["Cutifier.safetensors", "Krea2-realism-V2.safetensors", "unused.safetensors"]);
+    expect(loras.every(item => item.matched)).toBe(true);
   });
 });

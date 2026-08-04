@@ -24,8 +24,12 @@ dist/
 build/
 outputs/
 logs/
-data/
+# Ignore runtime data files but keep tracked seeds (parent dir must stay un-ignored)
+data/*
 !data/.gitkeep
+# Version shared editable prompt lists (not jobs / uploads / secrets)
+!data/dataset-prompt-lists/
+!data/dataset-prompt-lists/**
 
 # ── Secrets & credentials (NEVER commit) ──────────────────────
 .env

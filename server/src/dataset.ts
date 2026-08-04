@@ -1,5 +1,50 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import {
+  DEFAULT_PROMPT_LIST_ID,
+  loadPromptListSafe,
+  promptIndexForSlot
+} from "./dataset-prompt-lists.js";
+
+const projectRootFromHere = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+
+/**
+ * Resolve Instagram UGC prompts from data/dataset-prompt-lists/instagram-ugc.json
+ * (editable) or an optional per-run custom list. Do not hardcode long prompts here.
+ */
+export function resolveInstagramPrompts(
+  projectRoot = projectRootFromHere,
+  options?: { promptListId?: string; customPrompts?: string[] }
+): string[] {
+  if (options?.customPrompts?.length) {
+    return options.customPrompts.map(item => item.trim()).filter(Boolean);
+  }
+  const id = options?.promptListId || DEFAULT_PROMPT_LIST_ID;
+  const list = loadPromptListSafe(projectRoot, id);
+  if (!list?.prompts?.length) {
+    throw new Error(
+      `Instagram UGC prompt list "${id}" is missing or empty. ` +
+        `Edit data/dataset-prompt-lists/${id}.json or use Dataset Builder → Edit prompt list.`
+    );
+  }
+  return list.prompts;
+}
+
+/** Load current Instagram UGC shots (from editable JSON). */
+export function getInstagramUgcShots(projectRoot = projectRootFromHere): string[] {
+  return resolveInstagramPrompts(projectRoot);
+}
+
+/** Current list length (dynamic — do not hardcode 40 in call sites). */
+export function getInstagramUgcShotCount(projectRoot = projectRootFromHere): number {
+  return resolveInstagramPrompts(projectRoot).length;
+}
+
+/** @deprecated Prefer getInstagramUgcShots() — snapshot for older imports. */
+export const INSTAGRAM_UGC_SHOTS = getInstagramUgcShots();
+/** @deprecated Prefer getInstagramUgcShotCount() */
+export const INSTAGRAM_UGC_SHOT_COUNT = INSTAGRAM_UGC_SHOTS.length;
 
 const DEFAULT_MATRIX = {
   angles: ["front", "three-quarter", "profile", "back three-quarter"],
@@ -119,6 +164,32 @@ export const datasetSchema = z.object({
   masterReference: z.string().max(500).refine(value => !path.isAbsolute(value) && !value.includes("..")).optional(),
   characterAdjustments: characterAdjustmentsSchema,
   captionStrategy: z.enum(["identity-focused", "flexible-character", "outfit-concept", "style", "custom"]).default("flexible-character"),
+  /**
+   * standard = directed pose/angle matrix (default Dataset Builder).
+   * instagram-ugc = editable prompt list (data/dataset-prompt-lists/) for LoRA training.
+   */
+  datasetMode: z.enum(["standard", "instagram-ugc"]).default("standard"),
+  /** Which JSON list under data/dataset-prompt-lists/ to use in instagram-ugc mode. */
+  promptListId: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/i).default(DEFAULT_PROMPT_LIST_ID),
+  /**
+   * sequential = prompts[0], prompts[1], … in list order (default).
+   * shuffle = deterministic permutation per full cycle (seeded by seed + cycle).
+   */
+  promptOrder: z.enum(["sequential", "shuffle"]).default("sequential"),
+  /**
+   * Optional one-run override: full prompt strings (replaces file list for this build only).
+   * Prefer editing the JSON list via API for permanent updates.
+   */
+  customPrompts: z.array(z.string().trim().min(8).max(4000)).max(200).optional(),
+  /** Generation LoRAs matched from the master image stack (or explicit). Applied during dataset sampling. */
+  loras: z.array(z.object({
+    name: z.string().min(1).max(260).refine(v => !path.isAbsolute(v) && !v.includes("..")),
+    strength: z.number().min(-2).max(2).default(1)
+  })).max(8).default([]),
+  /** True when model/LoRAs were resolved from master PNG or gallery metadata. */
+  stackMatchedFromMaster: z.boolean().default(false),
+  /** Optional project root override (tests). */
+  projectRoot: z.string().optional(),
   promptMatrix: matrixSchema.default(DEFAULT_MATRIX)
 });
 
@@ -135,13 +206,188 @@ function usesDefault(values: string[], defaults: readonly string[]) {
   return values.length === defaults.length && values.every((value, index) => value === defaults[index]);
 }
 
-export function datasetPrompts(input: DatasetInput) {
-  const matrix = input.promptMatrix;
-  const adjustmentText = [
+function instagramShotTags(shot: string, listIndex: number, cycle: number, order: string) {
+  const lower = shot.toLowerCase();
+  const framing = lower.includes("close-up")
+    ? "close-up headshot"
+    : lower.includes("medium shot")
+      ? "waist-up medium shot"
+      : lower.includes("full-body")
+        ? "full-body view"
+        : "lifestyle shot";
+  const angle = lower.includes("side profile") || lower.includes("sideways")
+    ? "profile"
+    : lower.includes("over shoulder") || lower.includes("looking back")
+      ? "three-quarter over-shoulder"
+      : lower.includes("mirror")
+        ? "mirror selfie front"
+        : "eye-level front";
+  const scene = lower.includes("bedroom") || lower.includes("bed")
+    ? "bedroom"
+    : lower.includes("window")
+      ? "window-side interior"
+      : lower.includes("wall") || lower.includes("floor")
+        ? "indoor lifestyle"
+        : "casual indoor lifestyle";
+  const lighting = lower.includes("side light") || lower.includes("window")
+    ? "soft window side light"
+    : "soft natural indoor light";
+  return {
+    angle,
+    framing,
+    expression: "instagram lifestyle expression",
+    /** Short pose key for uniqueness checks — full shot lives in tags.shot */
+    pose: `list#${listIndex}`,
+    shot,
+    scene,
+    lighting,
+    outfit: "outfit as described in shot",
+    background: scene,
+    mode: "instagram-ugc",
+    order,
+    cycle: String(cycle),
+    shotIndex: String(listIndex)
+  };
+}
+
+function characterAdjustmentText(input: DatasetInput) {
+  return [
     input.characterAdjustments.hair && `intentional hair adjustment: ${input.characterAdjustments.hair}`,
     input.characterAdjustments.body && `intentional body proportion adjustment: ${input.characterAdjustments.body}`,
     input.characterAdjustments.other && `intentional character adjustment: ${input.characterAdjustments.other}`
   ].filter(Boolean).join(", ");
+}
+
+/**
+ * Build character half from Dataset Builder fields (saved profile → basePrompt + optional adjustments).
+ *
+ * Sources allowed: form `basePrompt`, character adjustments, trigger (handled separately).
+ * Sources never used here: master PNG A1111 positive text, gallery job prompt, stack metadata prompt.
+ */
+export function composeCharacterFeatureBlock(input: DatasetInput): string {
+  const base = String(input.basePrompt || "").trim();
+  const adjustments = characterAdjustmentText(input);
+  return [base, adjustments].filter(Boolean).join(", ");
+}
+
+/**
+ * Identity reference strength for dataset sampling.
+ *
+ * Master image is only an identity lock (Krea Identity / structural ref) — NOT a prompt source.
+ * High ref_boost (e.g. 1.15) copies the master's pose, outfit, and framing and fights the shot list.
+ * Instagram UGC needs lower strength so list prompts (outfit/pose/camera) can win.
+ */
+export function datasetIdentityReferenceStrength(
+  architecture: string,
+  datasetMode: "standard" | "instagram-ugc" = "standard"
+): number {
+  if (datasetMode === "instagram-ugc") {
+    // List drives pose/outfit; keep just enough identity lock.
+    return architecture === "krea2" ? 0.72 : architecture === "illustrious" ? 0.55 : 0.55;
+  }
+  // Standard matrix still wants variety — below legacy 1.15/0.8 which frozen the master look.
+  return architecture === "krea2" ? 0.85 : architecture === "illustrious" ? 0.65 : 0.65;
+}
+
+/**
+ * Instagram UGC caption structure (training + generation):
+ *   [1] list prompt (one of the 40 editable shots — pose/outfit/camera)
+ *   [2] character features (chosen character description for this dataset)
+ * Optional cycle note + same-person anchors at the end.
+ *
+ * Never inject master-image generation text. Caption = list + form character only.
+ */
+export function composeInstagramDatasetCaption(options: {
+  listPrompt: string;
+  characterFeatures: string;
+  trigger?: string;
+  cycleDirective?: string;
+}): { caption: string; listHalf: string; characterHalf: string } {
+  const listHalf = String(options.listPrompt || "").trim();
+  const characterHalf = String(options.characterFeatures || "").trim();
+  const trigger = String(options.trigger || "").trim();
+  const triggerToken = trigger.replace(/^photo of\s+/i, "").trim();
+  const hasTrigger =
+    !trigger ||
+    listHalf.toLowerCase().includes(trigger.toLowerCase()) ||
+    (triggerToken.length > 1 && listHalf.toLowerCase().includes(triggerToken.toLowerCase())) ||
+    (characterHalf && characterHalf.toLowerCase().includes(triggerToken.toLowerCase()));
+
+  // First half: optional trigger (if missing) + list prompt
+  const firstHalf = [hasTrigger ? "" : trigger, listHalf].filter(Boolean).join(", ");
+  // Second half: character features from the selected dataset character
+  const secondHalf = characterHalf
+    ? `character features: ${characterHalf}`
+    : "";
+
+  const caption = [
+    firstHalf,
+    options.cycleDirective?.trim() || "",
+    secondHalf,
+    "same person",
+    "consistent identity across dataset"
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  return { caption, listHalf: firstHalf, characterHalf: secondHalf };
+}
+
+/**
+ * Instagram UGC mode: one list prompt per image + character features half.
+ * sequential = list order; shuffle = unique permuted order each full cycle.
+ */
+function instagramUgcPrompts(input: DatasetInput) {
+  const root = input.projectRoot || projectRootFromHere;
+  const shots = resolveInstagramPrompts(root, {
+    promptListId: input.promptListId,
+    customPrompts: input.customPrompts
+  });
+  const listLen = shots.length;
+  const characterFeatures = composeCharacterFeatureBlock(input);
+  const order = input.promptOrder || "sequential";
+  const cycleNotes = [
+    "",
+    "alternate Instagram pass with mirrored body orientation and slightly different camera height",
+    "third Instagram pass with changed hand placement and gaze while keeping the same outfit concept"
+  ];
+
+  return Array.from({ length: input.count }, (_, index) => {
+    const slot = input.variationOffset + index;
+    const { listIndex, cycle, positionInCycle } = promptIndexForSlot(slot, listLen, order, input.seed);
+    const shot = shots[listIndex];
+    const tags = instagramShotTags(shot, listIndex, cycle, order);
+    const cycleDirective = cycleNotes[Math.min(cycle, cycleNotes.length - 1)];
+    const composed = composeInstagramDatasetCaption({
+      listPrompt: shot,
+      characterFeatures,
+      trigger: input.trigger,
+      cycleDirective
+    });
+
+    return {
+      index,
+      seed: input.seed + index,
+      variationSlot: slot,
+      listIndex,
+      positionInCycle,
+      tags: {
+        ...tags,
+        listHalf: composed.listHalf,
+        characterHalf: composed.characterHalf
+      },
+      caption: composed.caption,
+      listHalf: composed.listHalf,
+      characterHalf: composed.characterHalf
+    };
+  });
+}
+
+export function datasetPrompts(input: DatasetInput) {
+  if (input.datasetMode === "instagram-ugc") return instagramUgcPrompts(input);
+
+  const matrix = input.promptMatrix;
+  const adjustmentText = characterAdjustmentText(input);
   return Array.from({ length: input.count }, (_, index) => {
     const slot = input.variationOffset + index;
     const sequenceIndex = slot % DEFAULT_POSE_SEQUENCE.length;
@@ -164,12 +410,22 @@ export function datasetPrompts(input: DatasetInput) {
     };
     const cycleDirective = cycleDirectives[Math.min(cycle, cycleDirectives.length - 1)];
     const shot = `${tags.framing}, ${tags.angle} camera angle, ${tags.expression} expression, ${tags.pose}, ${tags.scene}, ${tags.lighting}, ${tags.outfit}, ${tags.background}${cycleDirective ? `, ${cycleDirective}` : ""}, clearly distinct body arrangement and camera composition`;
+    const caption = `${input.trigger}, ${input.basePrompt}${adjustmentText ? `, ${adjustmentText}` : ""}, ${shot}, same person, consistent facial features, consistent hair, realistic anatomy`;
     return {
-      index, seed: input.seed + index, variationSlot: slot, tags,
-      caption: `${input.trigger}, ${input.basePrompt}${adjustmentText ? `, ${adjustmentText}` : ""}, ${shot}, same person, consistent facial features, consistent hair, realistic anatomy`
+      index,
+      seed: input.seed + index,
+      variationSlot: slot,
+      listIndex: sequenceIndex,
+      positionInCycle: sequenceIndex,
+      tags,
+      caption,
+      listHalf: shot,
+      characterHalf: `character features: ${[input.basePrompt, adjustmentText].filter(Boolean).join(", ")}`
     };
   });
 }
+
+export type DatasetPromptPlanItem = ReturnType<typeof datasetPrompts>[number];
 
 export function datasetCaptionForPrompt(record: {
   promptPlan?: Array<{ index?: number; caption?: string }>;

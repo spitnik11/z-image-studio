@@ -5440,3 +5440,35 @@ button.reuse.improve{margin-left:0.35rem}
 .improve-toggles label{display:flex;gap:0.55rem;align-items:flex-start;font-size:0.85rem;cursor:pointer}
 .improve-toggles label span{display:flex;flex-direction:column;gap:0.15rem}
 .improve-toggles small{opacity:0.7;font-weight:400}
+
+/* Instagram UGC dataset mode */
+.instagram-shot-preview{margin:0.5rem 0 0;padding-left:1.1rem;font-size:0.82rem;line-height:1.4;opacity:0.9}
+.instagram-shot-preview li{margin:0.25rem 0}
+.dataset-guidance strong{display:block;margin-bottom:0.25rem}
+/* Dataset hard stop */
+button.stop-dataset{display:inline-flex;align-items:center;gap:0.35rem;padding:0.4rem 0.7rem;border-radius:8px;border:1px solid color-mix(in srgb,#ff6b6b 55%,transparent);background:color-mix(in srgb,#ff6b6b 14%,transparent);color:inherit;cursor:pointer;font-size:0.82rem;font-weight:600}
+button.stop-dataset:hover{background:color-mix(in srgb,#ff6b6b 28%,transparent)}
+/* Master stack match (dataset) */
+.master-stack-card{margin:0.55rem 0 0.75rem;padding:0.65rem 0.8rem;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:rgba(0,0,0,0.18);font-size:0.82rem;line-height:1.35}
+.master-stack-card.matched{border-color:color-mix(in srgb,var(--accent,#b8ff4a) 45%,transparent)}
+.master-stack-card.fallback{border-color:color-mix(in srgb,#f0c674 40%,transparent)}
+.master-stack-card strong{display:block;margin-bottom:0.2rem}
+.master-stack-card small{opacity:0.85}
+.master-stack-loras{margin:0.4rem 0 0.35rem;padding-left:1.1rem}
+.master-stack-hint{display:block;margin-top:0.35rem;opacity:0.72;font-size:0.78rem}
+.dataset-stack-line{display:block;opacity:0.75;margin-top:0.15rem}
+/* Dataset LoRA picker */
+.dataset-lora-stack{margin:0.55rem 0 0.75rem;padding:0.65rem 0.8rem;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:rgba(0,0,0,0.12)}
+.dataset-lora-stack .section-title{display:flex;align-items:center;gap:0.4rem;margin-bottom:0.35rem}
+.dataset-lora-stack .section-title button{margin-left:auto}
+.dataset-lora-help{font-size:0.78rem;opacity:0.75;margin:0 0 0.45rem;line-height:1.35}
+.dataset-lora-add{display:flex;gap:0.4rem;align-items:center}
+.dataset-lora-add select{flex:1}
+.dataset-lora-list{display:flex;flex-direction:column;gap:0.4rem;margin-top:0.55rem}
+.dataset-lora-row{display:grid;grid-template-columns:1fr auto auto;gap:0.45rem;align-items:center;font-size:0.82rem}
+.dataset-lora-row input[type=number]{width:4.2rem}
+.master-stack-warn{display:block;color:#f0c674;margin-top:0.25rem}
+/* Dataset prompt list editor */
+.prompt-list-actions{display:flex;flex-wrap:wrap;gap:0.45rem;align-items:center;margin:0.45rem 0}
+.prompt-list-editor textarea{width:100%;min-height:12rem;font-family:ui-monospace,Consolas,monospace;font-size:0.75rem;line-height:1.35;padding:0.55rem;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(0,0,0,0.25);color:inherit}
+.prompt-list-editor{margin-top:0.4rem}

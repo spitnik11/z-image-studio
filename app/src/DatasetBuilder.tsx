@@ -1,11 +1,26 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, Download, FolderOpen, ImagePlus, Images, LoaderCircle, Maximize2, Play, RefreshCw, ScanSearch, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Download, FolderOpen, ImagePlus, Images, LoaderCircle, Maximize2, Play, Plus, RefreshCw, ScanSearch, Sparkles, Trash2, X } from "lucide-react";
 
 type ModelItem = { name: string; architecture: "z-image" | "krea2" | "illustrious" | "anima" | "unknown" };
+type LoraOption = { name: string; displayName?: string; recommendedStrength?: number; architecture?: string };
 type DatasetJob = {
   id: string; name: string; trigger: string; model: string; status: string; progress: number;
   phase?: string; count: number; images: string[]; warning?: string; error?: string;
   characterAdjustments?: CharacterAdjustments;
+  datasetMode?: "standard" | "instagram-ugc";
+  loras?: Array<{ name: string; strength: number }>;
+  stackMatchedFromMaster?: boolean;
+  stackNote?: string;
+};
+type DatasetMode = "standard" | "instagram-ugc";
+type PromptOrder = "sequential" | "shuffle";
+type PromptListDoc = { id: string; name: string; version: number; description?: string; prompts: string[]; updatedAt?: string };
+type MasterStackInfo = {
+  model?: string;
+  loras: Array<{ name: string; strength: number }>;
+  matchedFromMaster: boolean;
+  note: string;
+  unmatchedLoras?: string[];
 };
 type CharacterAdjustments = { hair: string; body: string; other: string };
 export type DatasetPresetHandoff = { name:string;architecture:"z-image"|"krea2";characterDescription:string;masterReference:string;additionalImages:string[];note:string };
@@ -50,6 +65,17 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
   const [profiles, setProfiles] = useState<CharacterProfile[]>([]);
   const [characterProfileId, setCharacterProfileId] = useState("");
   const [captionStrategy, setCaptionStrategy] = useState("flexible-character");
+  const [datasetMode, setDatasetMode] = useState<DatasetMode>("standard");
+  const [promptOrder, setPromptOrder] = useState<PromptOrder>("sequential");
+  const [promptList, setPromptList] = useState<PromptListDoc | null>(null);
+  const [promptEditor, setPromptEditor] = useState("");
+  const [promptEditorOpen, setPromptEditorOpen] = useState(false);
+  const [promptSaveState, setPromptSaveState] = useState("");
+  const [masterStack, setMasterStack] = useState<MasterStackInfo | null>(null);
+  /** Manual + auto-detected LoRA stack used for dataset generation (back-compat with form-only builds). */
+  const [datasetLoras, setDatasetLoras] = useState<Array<{ name: string; strength: number }>>([]);
+  const [availableLoras, setAvailableLoras] = useState<LoraOption[]>([]);
+  const [loraPick, setLoraPick] = useState("");
   const [matrix, setMatrix] = useState<Record<keyof typeof matrixOptions, string[]>>(() => Object.fromEntries(Object.entries(matrixOptions).map(([key, values]) => [key, [...values]])) as any);
   const [varyOutfits, setVaryOutfits] = useState(true);
   const [varyBackgrounds, setVaryBackgrounds] = useState(true);
@@ -66,11 +92,15 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
   useEffect(() => {
     setModel(current => current || models.find(item => item.architecture === "krea2")?.name || models.find(item => item.architecture === "z-image")?.name || "");
   }, [models]);
+  useEffect(() => {
+    if (model) void refreshDatasetLoras(model);
+  }, [model, models]);
   useEffect(()=>{
     if(!presetHandoff)return;
     setName(presetHandoff.name);setBasePrompt(presetHandoff.characterDescription);setPresetMaster(presetHandoff.masterReference);
     setModel(models.find(item=>item.architecture===presetHandoff.architecture)?.name||"");
     setNotice(`${presetHandoff.note} Add a trigger phrase, review the settings, then build when ready.`);
+    if (presetHandoff.masterReference) void inspectMasterStack(undefined, presetHandoff.masterReference);
   },[presetHandoff,models]);
   useEffect(() => {
     refresh().catch(error => setNotice(error.message));
@@ -78,42 +108,198 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
     const timer = window.setInterval(() => refresh().catch(() => {}), 4000);
     return () => window.clearInterval(timer);
   }, []);
+  async function loadPromptList(id = "instagram-ugc") {
+    try {
+      const list = await fetch(`/api/datasets/prompt-lists/${encodeURIComponent(id)}`).then(r => {
+        if (!r.ok) throw new Error("Could not load prompt list.");
+        return r.json();
+      }) as PromptListDoc;
+      setPromptList(list);
+      setPromptEditor(list.prompts.join("\n\n"));
+      return list;
+    } catch (error: any) {
+      setNotice(error.message || "Could not load prompt list.");
+      return null;
+    }
+  }
+  async function savePromptListEdits() {
+    if (!promptList) return;
+    setPromptSaveState("Saving…");
+    try {
+      // Blank-line separated blocks preserve multi-sentence prompts.
+      const body = {
+        promptsText: promptEditor,
+        name: promptList.name,
+        description: promptList.description
+      };
+      const response = await fetch(`/api/datasets/prompt-lists/${encodeURIComponent(promptList.id)}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Could not save prompt list.");
+      setPromptList(payload);
+      setPromptEditor((payload.prompts || []).join("\n\n"));
+      setPromptSaveState(`Saved v${payload.version} · ${payload.prompts?.length || 0} prompts`);
+      setNotice(`Prompt list updated: ${payload.prompts?.length || 0} prompts (v${payload.version}). New dataset builds use this list.`);
+    } catch (error: any) {
+      setPromptSaveState("");
+      setNotice(error.message || "Could not save prompt list.");
+    }
+  }
+  useEffect(() => {
+    if (datasetMode === "instagram-ugc") void loadPromptList("instagram-ugc");
+  }, [datasetMode]);
 
+  async function refreshDatasetLoras(modelName = model) {
+    try {
+      const selected = models.find(item => item.name === modelName);
+      const architecture = selected?.architecture;
+      const found = await fetch(`/api/loras${architecture && architecture !== "unknown" ? `?architecture=${encodeURIComponent(architecture)}` : ""}`).then(r => r.json());
+      const list = Array.isArray(found) ? found as LoraOption[] : [];
+      setAvailableLoras(list);
+      setLoraPick(current => list.some(item => item.name === current) ? current : (list[0]?.name || ""));
+      setDatasetLoras(current => current.filter(item => list.some(option => option.name === item.name) || !list.length));
+    } catch {
+      /* keep previous list */
+    }
+  }
+  async function inspectMasterStack(file?: File, masterReference?: string) {
+    try {
+      const body = new FormData();
+      if (file) body.append("master", file);
+      if (masterReference) body.append("masterReference", masterReference);
+      if (model) body.append("model", model);
+      if (datasetLoras.length) body.append("loras", JSON.stringify(datasetLoras));
+      const response = await fetch("/api/datasets/inspect-master", { method: "POST", body });
+      const payload = await response.json().catch(() => ({}));
+      // Soft-fail API always returns 200; only network failures hit catch.
+      if (!response.ok && !payload.softFail) throw new Error(payload.error || "Could not read master image stack.");
+      const detected = Array.isArray(payload.loras) ? payload.loras : (Array.isArray(payload.detectedLoras) ? payload.detectedLoras : []);
+      const info: MasterStackInfo = {
+        model: payload.model,
+        loras: detected,
+        matchedFromMaster: Boolean(payload.matchedFromMaster),
+        note: payload.note || payload.error || "",
+        unmatchedLoras: payload.unmatchedLoras || []
+      };
+      setMasterStack(info);
+      if (info.model && models.some(item => item.name === info.model)) {
+        setModel(info.model);
+        void refreshDatasetLoras(info.model);
+      }
+      // Merge detected LoRAs into the editable stack (do not wipe manual picks).
+      if (detected.length) {
+        setDatasetLoras(current => {
+          const map = new Map(current.map(item => [item.name, item]));
+          for (const lora of detected) {
+            if (!map.has(lora.name)) map.set(lora.name, { name: lora.name, strength: Number(lora.strength) || 1 });
+          }
+          return [...map.values()];
+        });
+      }
+      if (info.matchedFromMaster) {
+        setNotice(`Master stack: ${info.note}`);
+      } else if (file || masterReference) {
+        setNotice(payload.warning || "No model/LoRA metadata on this master — pick model and LoRAs below. Studio-generated PNGs auto-fill the stack.");
+      }
+      if (payload.error && !info.matchedFromMaster) {
+        setNotice(`Inspect note: ${payload.error}. You can still pick model and LoRAs manually.`);
+      }
+    } catch (error: any) {
+      // Never block dataset build — fall back to manual pickers.
+      setMasterStack({
+        model,
+        loras: datasetLoras,
+        matchedFromMaster: false,
+        note: "Inspect unavailable — choose model and LoRAs manually.",
+        unmatchedLoras: []
+      });
+      setNotice(error.message || "Could not inspect master stack. Pick model and LoRAs manually, then generate.");
+    }
+  }
   function choose(file?: File) {
     if (preview) URL.revokeObjectURL(preview);
     setMaster(file);
-    if(file)setPresetMaster("");
+    if (file) setPresetMaster("");
     setPreview(file ? URL.createObjectURL(file) : "");
+    if (file) void inspectMasterStack(file);
+    else {
+      setMasterStack(null);
+      setDatasetLoras([]);
+    }
+  }
+  function addDatasetLora() {
+    const record = availableLoras.find(item => item.name === loraPick);
+    if (!record || datasetLoras.some(item => item.name === record.name)) return;
+    setDatasetLoras(current => [...current, { name: record.name, strength: record.recommendedStrength ?? 1 }]);
   }
   function selectProfile(id: string) {
     setCharacterProfileId(id);
-    if(id)setPresetMaster("");
+    if (id) setPresetMaster("");
     const profile = profiles.find(value => value.id === id);
     if (!profile) return;
     setName(current => current || `${profile.name} dataset`);
     setTrigger(profile.triggerToken);
-    setBasePrompt([profile.stableIdentity, profile.hairstyle && `${profile.hairstyle} hair`, profile.eyeColor && `${profile.eyeColor} eyes`, profile.bodyCharacteristics, profile.defaultOutfit].filter(Boolean).join(", "));
+    // Identity-only for captions. In Instagram mode outfits come from the shot list — do not bake defaultOutfit into every caption.
+    const identityBits = [
+      profile.stableIdentity,
+      profile.hairstyle && `${profile.hairstyle} hair`,
+      profile.eyeColor && `${profile.eyeColor} eyes`,
+      profile.bodyCharacteristics
+    ];
+    if (datasetMode !== "instagram-ugc" && profile.defaultOutfit) identityBits.push(profile.defaultOutfit);
+    setBasePrompt(identityBits.filter(Boolean).join(", "));
     if (profile.preferredModel && models.some(value => value.name === profile.preferredModel)) setModel(profile.preferredModel);
+    const ref = profile.masterReferenceImages?.[0];
+    if (ref) void inspectMasterStack(undefined, ref);
   }
   async function build() {
     setNotice("");
     const profile = profiles.find(value => value.id === characterProfileId);
     if ((!master && !presetMaster && !profile?.masterReferenceImages?.length) || !name.trim() || !trigger.trim() || !model) return setNotice("Choose a master image or saved character reference, plus a dataset name, trigger phrase, and image model.");
     setSubmitting(true);
-    setNotice(`Preparing ${count} labelled images…`);
+    setNotice(`Preparing ${count} labelled images with matched model/LoRA stack…`);
     const body = new FormData();
     if (master) body.append("master", master);
-    body.append("config", JSON.stringify({ name, trigger, model, basePrompt, masterReference:presetMaster||undefined, characterAdjustments, count, width: 512, height: 768, seed: 42, characterProfileId: characterProfileId || undefined, captionStrategy, promptMatrix: { ...matrix, varyOutfits, varyBackgrounds } }));
+    body.append("config", JSON.stringify({
+      name, trigger, model, basePrompt,
+      masterReference: presetMaster || undefined,
+      characterAdjustments, count, width: 512, height: 768, seed: 42,
+      characterProfileId: characterProfileId || undefined,
+      captionStrategy,
+      datasetMode,
+      promptOrder: datasetMode === "instagram-ugc" ? promptOrder : "sequential",
+      promptListId: "instagram-ugc",
+      loras: datasetLoras,
+      promptMatrix: { ...matrix, varyOutfits, varyBackgrounds }
+    }));
     try {
       const response = await fetch("/api/datasets", { method: "POST", body });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "Dataset generation could not start.");
       setJobs(current => [payload, ...current.filter(job => job.id !== payload.id)]);
-      setNotice(`${count} images queued. Progress is now shown in Dataset history.`);
+      const stackMsg = payload.stackNote ? ` Stack: ${payload.stackNote}.` : "";
+      setNotice(`${count} images queued.${stackMsg} Progress is in Dataset history.`);
     } catch (error: any) {
       setNotice(error.message || "Dataset generation could not start.");
     } finally {
       setSubmitting(false);
+    }
+  }
+  async function stopDataset(job: DatasetJob) {
+    if (!["pending", "active", "paused"].includes(job.status)) return;
+    if (!window.confirm(`Stop “${job.name}” now?\n\nComfyUI will be interrupted and remaining jobs cancelled. Images already finished stay in the dataset for review.`)) return;
+    try {
+      const response = await fetch(`/api/datasets/${job.id}/stop`, { method: "POST" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Could not stop the dataset run.");
+      if (payload.record) setJobs(current => current.map(item => item.id === payload.record.id ? payload.record : item));
+      setNotice(payload.message || "Dataset run stopped.");
+      await refresh();
+    } catch (error: any) {
+      setNotice(error.message || "Could not stop the dataset run.");
     }
   }
   async function deleteDataset(job: DatasetJob) {
@@ -150,30 +336,126 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
     <aside className="dataset-builder-panel">
       <div className="eyebrow">CHARACTER DATASET</div>
       <h1>Turn one character into a training set</h1>
-      <p className="intro">Creates labelled headshots, medium shots, full-body views, and varied poses while keeping the master character as the identity guide.</p>
+      <p className="intro">{datasetMode === "instagram-ugc"
+        ? "Instagram UGC mode: fixed 40-shot selfie/lifestyle plan (close-up, medium, full-body) for training a character LoRA. Master image stays the identity guide."
+        : "Creates labelled headshots, medium shots, full-body views, and varied poses while keeping the master character as the identity guide."}</p>
       {notice && <p className="training-notice">{notice}</p>}
+      <label>Dataset mode<select value={datasetMode} onChange={event => {
+        const mode = event.target.value as DatasetMode;
+        setDatasetMode(mode);
+        if (mode === "instagram-ugc") {
+          setCount(40);
+          setCaptionStrategy("flexible-character");
+          setBasePrompt(current => current.includes("instagram") ? current : "photorealistic adult woman, consistent face and hair, natural skin, Instagram lifestyle aesthetic");
+        }
+      }}><option value="standard">Standard directed variety</option><option value="instagram-ugc">Instagram UGC LoRA training</option></select></label>
       <label>Saved character<select value={characterProfileId} onChange={event => selectProfile(event.target.value)}><option value="">No saved character</option>{profiles.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
-      <label>Dataset name<input value={name} onChange={event => setName(event.target.value)} placeholder="My character dataset"/></label>
+      <label>Dataset name<input value={name} onChange={event => setName(event.target.value)} placeholder={datasetMode === "instagram-ugc" ? "Instagram UGC dataset" : "My character dataset"}/></label>
       <label>Trigger phrase<input value={trigger} onChange={event => setTrigger(event.target.value)} placeholder="photo of zperson"/></label>
-      <label>Image model<select value={model} onChange={event => setModel(event.target.value)}>
+      <label>Image model<select value={model} onChange={event => { setModel(event.target.value); void refreshDatasetLoras(event.target.value); }}>
         <option value="">Choose a model</option>
-        {models.filter(item => item.architecture === "z-image" || item.architecture === "krea2").map(item => <option key={item.name} value={item.name}>{item.architecture === "krea2" ? "Krea 2 · strongest identity" : "Z-Image · structural reference"} · {item.name}</option>)}
+        {models.filter(item => item.architecture === "z-image" || item.architecture === "krea2" || item.architecture === "illustrious" || item.architecture === "anima").map(item => <option key={item.name} value={item.name}>{item.architecture === "krea2" ? "Krea 2 · strongest identity" : item.architecture === "z-image" ? "Z-Image · structural reference" : item.architecture === "illustrious" ? "Illustrious" : item.architecture === "anima" ? "Anima" : "Model"} · {item.name}</option>)}
       </select></label>
-      <label>Character description<textarea value={basePrompt} onChange={event => setBasePrompt(event.target.value)}/></label>
+      <div className="dataset-lora-stack">
+        <div className="section-title"><span>LoRAs for dataset</span><small>{datasetLoras.length} active</small><button type="button" onClick={() => refreshDatasetLoras(model)} aria-label="Refresh LoRAs" title="Refresh LoRAs"><RefreshCw size={14}/></button></div>
+        <p className="dataset-lora-help">Optional. Auto-filled from the master image when metadata is present; you can always add or remove LoRAs here. Same model + LoRA stack is used for every dataset shot.</p>
+        <div className="lora-add dataset-lora-add">
+          <select aria-label="Available LoRA" value={loraPick} onChange={event => setLoraPick(event.target.value)}>
+            <option value="">Choose a LoRA</option>
+            {availableLoras.map(record => (
+              <option key={record.name} value={record.name} disabled={datasetLoras.some(item => item.name === record.name)}>
+                {record.displayName || record.name.replace(/\.safetensors$/i, "")}
+              </option>
+            ))}
+          </select>
+          <button type="button" onClick={addDatasetLora} disabled={!loraPick || datasetLoras.some(item => item.name === loraPick)} aria-label="Add selected LoRA"><Plus size={15}/></button>
+        </div>
+        {datasetLoras.length > 0 && (
+          <div className="dataset-lora-list">
+            {datasetLoras.map((lora, index) => (
+              <div className="dataset-lora-row" key={lora.name}>
+                <span title={lora.name}>{lora.name.replace(/\.safetensors$/i, "")}</span>
+                <label>Strength
+                  <input type="number" min={-2} max={2} step={0.05} value={lora.strength}
+                    onChange={event => setDatasetLoras(current => current.map((item, i) => i === index ? { ...item, strength: Number(event.target.value) } : item))}/>
+                </label>
+                <button type="button" aria-label={`Remove ${lora.name}`} onClick={() => setDatasetLoras(current => current.filter(item => item.name !== lora.name))}><Trash2 size={14}/></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {masterStack && (
+        <div className={`master-stack-card ${masterStack.matchedFromMaster ? "matched" : "fallback"}`}>
+          <strong>{masterStack.matchedFromMaster ? "Master stack detected" : "Manual stack / no metadata"}</strong>
+          <small>{masterStack.note}</small>
+          {!!masterStack.unmatchedLoras?.length && <small className="master-stack-warn">Missing in Comfy: {masterStack.unmatchedLoras.join(", ")}</small>}
+          <span className="master-stack-hint">Master image is an identity reference + model/LoRA stack only — its original generation prompt is never reused. Dataset text comes from the shot list + Character description. If poses/outfits still match the master too closely, lower LoRA strengths or rebuild (identity lock is set moderate so the list can win).</span>
+        </div>
+      )}
+      <label>Character description<textarea value={basePrompt} onChange={event => setBasePrompt(event.target.value)} placeholder="Stable identity only — face, hair, body. Outfits come from the shot list in Instagram mode."/></label>
       <details className="character-adjustments">
         <summary>Character adjustments <span>Optional</span></summary>
         <p>Use these only for deliberate traits the whole dataset should learn. They affect generated images and captions, but do not overwrite the saved Character profile.</p>
         <label>Hair change<input value={characterAdjustments.hair} onChange={event => setCharacterAdjustments(current => ({ ...current, hair: event.target.value }))} placeholder="e.g. shoulder-length copper-red hair"/></label>
         <label>Body proportions<input value={characterAdjustments.body} onChange={event => setCharacterAdjustments(current => ({ ...current, body: event.target.value }))} placeholder="e.g. tall, athletic build with broad shoulders"/></label>
         <label>Other stable change<textarea value={characterAdjustments.other} onChange={event => setCharacterAdjustments(current => ({ ...current, other: event.target.value }))} placeholder="Only traits that should remain consistent across this dataset"/></label>
-        <div className="adjustment-advice"><AlertTriangle/><span>For temporary outfit, pose, expression, or scene changes, use Prompt variety instead. Mixing unlabelled identity changes can weaken a LoRA.</span></div>
+        <div className="adjustment-advice"><AlertTriangle/><span>For temporary outfit, pose, expression, or scene changes, use the shot list (Instagram mode) or Prompt variety (standard). Mixing unlabelled identity changes can weaken a LoRA.</span></div>
       </details>
-      <label>Dataset size<select value={count} onChange={event => setCount(Number(event.target.value))}><option value={12}>12 · test</option><option value={24}>24 · compact</option><option value={40}>40 · complete</option></select></label>
+      <label>Dataset size<select value={count} onChange={event => setCount(Number(event.target.value))}><option value={12}>12 · test</option><option value={24}>24 · compact</option><option value={40}>40 · complete{datasetMode === "instagram-ugc" ? " (full shot list)" : ""}</option></select></label>
       <label>Caption strategy<select value={captionStrategy} onChange={event => setCaptionStrategy(event.target.value)}><option value="identity-focused">Identity-focused</option><option value="flexible-character">Flexible character</option><option value="outfit-concept">Outfit / concept</option><option value="style">Style</option><option value="custom">Custom</option></select></label>
-      <details className="prompt-matrix"><summary><span>Prompt variety</span><em>40-shot directed sequence</em></summary><p className="prompt-matrix-note">Defaults step through 40 distinct poses with ordered framing, camera angles, expressions, scenes, and lighting. Narrowing a category below overrides that part of the sequence.</p>{(Object.keys(matrixOptions) as (keyof typeof matrixOptions)[]).map(key => <MultiToggle key={key} label={key} values={matrixOptions[key]} selected={matrix[key]} onChange={values => setMatrix(current => ({ ...current, [key]: values }))}/>)}
-        <label className="matrix-check"><input type="checkbox" checked={varyOutfits} onChange={event => setVaryOutfits(event.target.checked)}/>Vary outfits</label>
-        <label className="matrix-check"><input type="checkbox" checked={varyBackgrounds} onChange={event => setVaryBackgrounds(event.target.checked)}/>Vary backgrounds</label>
-      </details>
+      {datasetMode === "instagram-ugc" ? (
+        <details className="prompt-matrix" open>
+          <summary><span>Instagram prompt list</span><em>{promptList?.prompts?.length || "…"} prompts · {promptOrder}</em></summary>
+          <p className="prompt-matrix-note">
+            Each image caption is two halves:
+            <strong> (1) list prompt</strong> — one of the {promptList?.prompts?.length || 40} shots
+            ({promptOrder === "sequential" ? "in order 1→N" : "shuffled, unique per pass"});
+            <strong> (2) character features</strong> — from Character description / saved character (body, face, hair, etc.).
+            Put Lili’s full desc in <em>Character description</em>. Edit the list below or <code>data/dataset-prompt-lists/instagram-ugc.json</code>.
+          </p>
+          <label>Prompt order
+            <select value={promptOrder} onChange={event => setPromptOrder(event.target.value as PromptOrder)}>
+              <option value="sequential">In order (1→N)</option>
+              <option value="shuffle">Shuffle (unique per pass)</option>
+            </select>
+          </label>
+          <div className="prompt-list-actions">
+            <button type="button" onClick={() => { setPromptEditorOpen(v => !v); if (!promptList) void loadPromptList(); }}>
+              {promptEditorOpen ? "Hide editor" : "Edit / replace prompt list"}
+            </button>
+            <button type="button" onClick={() => loadPromptList("instagram-ugc")}>Reload from disk</button>
+          </div>
+          {promptEditorOpen && (
+            <div className="prompt-list-editor">
+              <p className="prompt-matrix-note">Separate prompts with a <strong>blank line</strong>. Saving replaces the entire list for future dataset builds.</p>
+              <textarea
+                value={promptEditor}
+                onChange={event => setPromptEditor(event.target.value)}
+                rows={14}
+                spellCheck={false}
+                aria-label="Dataset prompt list editor"
+              />
+              <div className="prompt-list-actions">
+                <button type="button" className="use-lora" onClick={savePromptListEdits}>Save prompt list</button>
+                <small>{promptSaveState || `${promptEditor.split(/\n\s*\n/).filter(Boolean).length} blocks detected`}</small>
+              </div>
+            </div>
+          )}
+          {!promptEditorOpen && promptList && (
+            <ul className="instagram-shot-preview">
+              <li><strong>List</strong> {promptList.name} v{promptList.version} · {promptList.prompts.length} prompts</li>
+              <li><strong>1</strong> {promptList.prompts[0]?.slice(0, 100)}…</li>
+              <li><strong>{promptList.prompts.length}</strong> {promptList.prompts[promptList.prompts.length - 1]?.slice(0, 100)}…</li>
+            </ul>
+          )}
+        </details>
+      ) : (
+        <details className="prompt-matrix"><summary><span>Prompt variety</span><em>40-shot directed sequence</em></summary><p className="prompt-matrix-note">Defaults step through 40 distinct poses with ordered framing, camera angles, expressions, scenes, and lighting. Narrowing a category below overrides that part of the sequence.</p>{(Object.keys(matrixOptions) as (keyof typeof matrixOptions)[]).map(key => <MultiToggle key={key} label={key} values={matrixOptions[key]} selected={matrix[key]} onChange={values => setMatrix(current => ({ ...current, [key]: values }))}/>)}
+          <label className="matrix-check"><input type="checkbox" checked={varyOutfits} onChange={event => setVaryOutfits(event.target.checked)}/>Vary outfits</label>
+          <label className="matrix-check"><input type="checkbox" checked={varyBackgrounds} onChange={event => setVaryBackgrounds(event.target.checked)}/>Vary backgrounds</label>
+        </details>
+      )}
       <button className="generate training-start" disabled={active} onClick={build}>{active ? <LoaderCircle className="spin"/> : <Play/>}<span>{submitting ? "Preparing dataset…" : active ? "Building dataset" : `Generate ${count} labelled images`}</span></button>
     </aside>
     {reviewJob ? <DatasetReview job={reviewJob} onClose={() => setReviewJob(undefined)} onTrain={() => onTrain(reviewJob.id)} onRecordChanged={record => {
@@ -186,20 +468,44 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
       <div className="training-heading"><div><span>MASTER CHARACTER</span><h2>Identity reference</h2></div><button onClick={() => input.current?.click()}><FolderOpen/>Choose image</button></div>
       <input ref={input} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={event => choose(event.target.files?.[0])}/>
       {preview ? <img className="dataset-master-image" src={preview} alt="Master character"/> : <div className="training-drop"><Sparkles/><h3>Choose your clearest character image</h3><p>Use a sharp, unobstructed face with neutral lighting. A waist-up or full-body source gives the generator more identity and clothing information.</p></div>}
-      <div className="dataset-guidance"><strong>Directed variety plan</strong><span>40 distinct pose and action slots</span><span>Ordered close-up, medium, seated, and full-body coverage</span><span>Extensions continue from the next unused slot instead of restarting</span></div>
+      <div className="dataset-guidance">{datasetMode === "instagram-ugc" ? <>
+        <strong>Instagram UGC LoRA plan</strong>
+        <span>40 fixed selfie and lifestyle shots</span>
+        <span>10 close-up · 13 medium · 17 full-body</span>
+        <span>Bed, mirror, phone, yoga, bikini, hoodie variety</span>
+        <span>Extensions continue the list instead of restarting</span>
+      </> : <>
+        <strong>Directed variety plan</strong>
+        <span>40 distinct pose and action slots</span>
+        <span>Ordered close-up, medium, seated, and full-body coverage</span>
+        <span>Extensions continue from the next unused slot instead of restarting</span>
+      </>}</div>
     </section>}
     <aside className="training-history">
       {reviewJob ? <div className="review-checklist"><div className="section-title"><span><Check/> Before training</span></div><ol><li><strong>Review every image</strong><span>Keep strong identity matches. Remove drift, anatomy problems, and duplicates from training.</span></li><li><strong>Check captions</strong><span>Caption edits save automatically and follow each kept image into LoRA Lab.</span></li><li><strong>Add anything missing</strong><span>New local images enter as Unsure so they cannot train until you approve them.</span></li><li><strong>Continue with kept images</strong><span>At least 3 are required; 12–30 varied, high-quality images are recommended.</span></li></ol></div> : <><div className="section-title history-title"><span><Images/> Dataset history</span><button onClick={() => refresh().then(() => setNotice("Dataset history refreshed.")).catch(error => setNotice(error.message))} aria-label="Refresh dataset history"><RefreshCw/>Refresh</button></div>
       {jobs.map(job => <article key={job.id}>
         <div className="training-job-head"><strong>{job.name}</strong><span className={`training-state ${job.status}`}>{job.status}</span></div>
-        <small>{job.status === "completed" ? `${job.images?.length || 0} images` : `${job.images?.length || 0}/${job.count} images`} · {job.phase}</small>
+        <small>{job.datasetMode === "instagram-ugc" ? "Instagram UGC · " : ""}{job.status === "completed" ? `${job.images?.length || 0} images` : `${job.images?.length || 0}/${job.count} images`} · {job.phase}</small>
+        {(job.model || job.loras?.length) && (
+          <small className="dataset-stack-line" title={job.stackNote || ""}>
+            {(job.model || "").replace(/\.safetensors$/i, "") || "model?"}
+            {job.loras?.length ? ` · ${job.loras.length} LoRA${job.loras.length === 1 ? "" : "s"}` : " · no LoRAs"}
+            {job.stackMatchedFromMaster ? " · matched master" : ""}
+          </small>
+        )}
         {["pending", "active", "paused"].includes(job.status) && <div className="progress"><i style={{ width: `${Math.max(3, job.progress || 0)}%` }}/></div>}
         {job.warning && <p className="training-tip">{job.warning}</p>}
         {job.error && <p className="training-error">{job.error}</p>}
         {job.status === "completed" && <p className="training-complete"><Check/>Ready to review before training</p>}
         <div className="dataset-history-actions">
+          {["pending", "active", "paused"].includes(job.status) && (
+            <button className="stop-dataset" type="button" onClick={() => stopDataset(job)} title="Interrupt ComfyUI and cancel remaining dataset jobs. Keeps finished images.">
+              <X/> Stop run
+            </button>
+          )}
           {job.status === "completed" && <button className="use-lora" onClick={() => setReviewJob(job)}>Review dataset</button>}
           {job.status === "failed" && <button className="recover-dataset" onClick={() => recoverDataset(job)}><RefreshCw/>Recover</button>}
+          {job.status === "cancelled" && (job.images?.length || 0) === 0 && <button className="recover-dataset" onClick={() => recoverDataset(job)}><RefreshCw/>Recover</button>}
           <button className="delete-dataset" disabled={["pending", "active", "paused"].includes(job.status)} onClick={() => deleteDataset(job)}><Trash2/>Delete</button>
         </div>
       </article>)}
