@@ -8,6 +8,7 @@ type DatasetJob = {
   phase?: string; count: number; images: string[]; warning?: string; error?: string;
   characterAdjustments?: CharacterAdjustments;
   datasetMode?: "standard" | "instagram-ugc";
+  seed?: number;
   loras?: Array<{ name: string; strength: number }>;
   stackMatchedFromMaster?: boolean;
   stackNote?: string;
