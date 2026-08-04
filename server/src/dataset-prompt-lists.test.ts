@@ -25,13 +25,13 @@ describe("dataset prompt lists", () => {
     const projectRoot = path.resolve(process.cwd(), "..");
     const list = loadPromptList(projectRoot, "instagram-ugc");
     expect(list.prompts.length).toBe(40);
-    expect(list.version).toBeGreaterThanOrEqual(3);
+    expect(list.version).toBeGreaterThanOrEqual(4);
     expect(list.prompts[0]).toMatch(/Casual amateur phone snapshot/i);
     expect(list.prompts[0]).toMatch(/lili doe/i);
     expect(list.prompts[0]).toMatch(/blush-pink cotton pajama/i);
-    expect(list.prompts[0]).toMatch(/close-up pouty/i);
+    expect(list.prompts[0]).toMatch(/exaggerated pout/i);
     expect(list.prompts[39]).toMatch(/full-body standing full frontal/i);
-    expect(list.prompts[39]).toMatch(/opaque white yoga tank/i);
+    expect(list.prompts[39]).toMatch(/mischievous smirk/i);
   });
 
   it("replaces prompts via save path for manual updates", () => {

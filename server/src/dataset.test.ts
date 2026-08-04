@@ -92,8 +92,9 @@ describe("Dataset Builder", () => {
     expect(shots[0]).toMatch(/Casual amateur phone snapshot/i);
     expect(shots[0]).toMatch(/lili doe/i);
     expect(shots[0]).toMatch(/pajama/i);
+    expect(shots[0]).toMatch(/exaggerated pout/i);
     expect(shots[39]).toMatch(/full frontal/i);
-    expect(shots[39]).toMatch(/yoga tank/i);
+    expect(shots[39]).toMatch(/mischievous smirk/i);
     const liliDesc =
       "lili doe, a young woman in her early twenties with the soft freckled doe-eyed look of a Belle Delphine-inspired Instagram model, large brown doe eyes, soft pouty lips, delicate freckles across pale cheeks and nose, long soft dark brown curly hair falling in loose waves over her shoulders and down her back, slender waist, large perfectly rounded curvy ass, C-cup breasts, natural skin texture with visible pores and freckles, playful teasing expression that shifts between innocent “hi” smiles and subtle flirty pouts";
     const input = datasetSchema.parse({
