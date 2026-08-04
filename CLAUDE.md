@@ -361,7 +361,13 @@ For normal implementation:
 5. Run `npm run build`.
 6. Run `npm test`.
 7. For UI changes, inspect the actual local app at desktop and 390px.
-8. For server changes, restart only the Studio backend unless ComfyUI itself changed.
+8. For server changes, **rebuild `server/dist` AND restart** the Studio backend
+   (`node server/dist/index.js` on port 3199). Node does **not** hot-reload dist.
+   Lesson 2026-08-04: a process started earlier kept re-merging master gallery LoRAs
+   (e.g. 5 including TextFusion Refusal) and ignored Dataset Builder LoRA edits;
+   symptom cue was warning text like `merged form LoRAs`. Vault:
+   `ClaudeBrain/.../LESSON-SERVER-DIST-RESTART.md` and
+   `FEEDBACK-zimage-server-dist-restart.md`. Restart ComfyUI only if Comfy itself changed.
 9. Verify existing data remains present.
 10. Update relevant documentation when a durable invariant changes.
 
