@@ -370,6 +370,16 @@ For normal implementation:
    `FEEDBACK-zimage-server-dist-restart.md`. Restart ComfyUI only if Comfy itself changed.
 9. Verify existing data remains present.
 10. Update relevant documentation when a durable invariant changes.
+11. **Dataset / generation changes — modular and backwards compatible:**
+    - Prefer pure helpers (`dataset.ts`, etc.) + thin route wiring; optional schema fields with
+      resolve-defaults so old jobs in `data/dataset-jobs.json` still work.
+    - Do not require new fields on historical records; do not break standard mode when adding
+      Instagram/list features.
+    - Always **preflight master image on disk** before enqueueing N Comfy graphs
+      (`requireDatasetMasterImage`). Missing `z-image-studio/<uuid>.png` causes mass LoadImage
+      failures. Vault: `LESSON-DATASET-MASTER-PREFLIGHT.md` /
+      `FEEDBACK-zimage-dataset-master-preflight.md`.
+    - On mid-batch submit failure, cancel already-queued prompt IDs; fail with a clear user error.
 
 Maintenance commands:
 
