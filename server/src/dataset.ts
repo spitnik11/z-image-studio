@@ -188,7 +188,13 @@ export const datasetSchema = z.object({
    * Prefer editing the JSON list via API for permanent updates.
    */
   customPrompts: z.array(z.string().trim().min(8).max(4000)).max(200).optional(),
-  /** Generation LoRAs matched from the master image stack (or explicit). Applied during dataset sampling. */
+  /**
+   * Negative prompt for every shot in this build (editable in Dataset Builder).
+   * Empty string falls back to mode defaults via resolveDatasetNegativePrompt.
+   * Instagram UGC defaults include clothing-coverage / anti-nude terms (not only identity).
+   */
+  negativePrompt: z.string().trim().max(2500).optional(),
+  /** Generation LoRAs from the Dataset Builder list (authoritative on create). Applied during sampling. */
   loras: z.array(z.object({
     name: z.string().min(1).max(260).refine(v => !path.isAbsolute(v) && !v.includes("..")),
     strength: z.number().min(-2).max(2).default(1)
@@ -201,6 +207,68 @@ export const datasetSchema = z.object({
 });
 
 export type DatasetInput = z.infer<typeof datasetSchema>;
+
+/** Standard directed-matrix negative (identity + variety). */
+export const DEFAULT_STANDARD_DATASET_NEGATIVE =
+  "different person, changed identity, duplicate person, repeated generic pose, static pose, same camera framing, distorted face, malformed hands";
+
+/**
+ * Instagram UGC negative: identity + quality + clothing coverage.
+ * Diffusion is weak at "no nudity" in the positive; push coverage from the negative side.
+ * Editable in Dataset Builder; this is the mode default only.
+ */
+export const DEFAULT_INSTAGRAM_UGC_NEGATIVE = [
+  "different person, changed identity, male, group photo, crowd",
+  "deformed face, malformed hands, extra limbs, fused fingers, blurry face",
+  "heavy beauty filter, watermark, text overlay, logo, low resolution",
+  "nude, naked, fully nude, topless, bottomless, unclothed, no clothes, removed clothes",
+  "exposed breasts, nipples, areola, genitals, pubic hair",
+  "see-through, transparent clothing, sheer fabric, lingerie only, underwear only",
+  "bikini only, wardrobe malfunction, clothing pulled down, missing clothes"
+].join(", ");
+
+/** Resolve negative for a dataset mode; custom non-empty string wins. */
+export function resolveDatasetNegativePrompt(
+  datasetMode: "standard" | "instagram-ugc" | string | undefined,
+  custom?: string | null
+): string {
+  const trimmed = String(custom ?? "").trim();
+  if (trimmed) return trimmed.slice(0, 2500);
+  return datasetMode === "instagram-ugc"
+    ? DEFAULT_INSTAGRAM_UGC_NEGATIVE
+    : DEFAULT_STANDARD_DATASET_NEGATIVE;
+}
+
+/**
+ * Dataset Builder editable LoRA list is authoritative on create.
+ * Master PNG/gallery LoRAs only seed inspect-master when form is not authoritative.
+ */
+export function resolveDatasetLoraHints(options: {
+  formLoras?: Array<{ name: string; strength: number }> | null;
+  masterLoras?: Array<{ name: string; strength: number }> | null;
+  /** true = use form list exactly (adds, removes, strengths). false = master-first merge for inspect. */
+  formAuthoritative: boolean;
+}): { loras: Array<{ name: string; strength: number }>; sources: string[] } {
+  const form = Array.isArray(options.formLoras) ? options.formLoras : [];
+  const master = Array.isArray(options.masterLoras) ? options.masterLoras : [];
+  const sources: string[] = [];
+  if (options.formAuthoritative) {
+    if (form.length) sources.push(`form LoRAs ×${form.length} (edited stack)`);
+    else sources.push("form LoRAs cleared (no stack LoRAs)");
+    return { loras: form.map(l => ({ name: l.name, strength: Number(l.strength) || 1 })), sources };
+  }
+  const loraMap = new Map<string, { name: string; strength: number }>();
+  const keyOf = (n: string) => path.basename(n).replace(/\.safetensors$/i, "").toLowerCase();
+  for (const lora of master) loraMap.set(keyOf(lora.name), lora);
+  for (const lora of form) {
+    const k = keyOf(lora.name);
+    if (!loraMap.has(k)) loraMap.set(k, lora);
+  }
+  if (master.length) sources.push(`master LoRAs ×${master.length}`);
+  if (form.length && master.length) sources.push("merged form extras");
+  else if (form.length && !master.length) sources.push("form LoRAs");
+  return { loras: [...loraMap.values()], sources };
+}
 
 export const datasetExtensionSchema = z.object({
   count: z.number().int().min(1).max(40),

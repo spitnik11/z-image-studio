@@ -7,9 +7,13 @@ import {
   datasetIdentityReferenceStrength,
   datasetPrompts,
   datasetSchema,
+  DEFAULT_INSTAGRAM_UGC_NEGATIVE,
   DEFAULT_POSE_SEQUENCE,
+  DEFAULT_STANDARD_DATASET_NEGATIVE,
   getInstagramUgcShotCount,
-  getInstagramUgcShots
+  getInstagramUgcShots,
+  resolveDatasetLoraHints,
+  resolveDatasetNegativePrompt
 } from "./dataset.js";
 
 const projectRoot = path.resolve(process.cwd(), "..");
@@ -158,6 +162,42 @@ describe("Dataset Builder", () => {
     expect(datasetCaptionForPrompt(record, 2)).toBe("recovery caption");
     expect(typeof datasetCaptionForPrompt({ captions: [], trigger: "zperson" }, 9)).toBe("string");
   });
+  it("resolves clothing-aware Instagram negatives and allows custom overrides", () => {
+    expect(resolveDatasetNegativePrompt("instagram-ugc")).toBe(DEFAULT_INSTAGRAM_UGC_NEGATIVE);
+    expect(resolveDatasetNegativePrompt("instagram-ugc")).toMatch(/nude/i);
+    expect(resolveDatasetNegativePrompt("instagram-ugc")).toMatch(/see-through/i);
+    expect(resolveDatasetNegativePrompt("standard")).toBe(DEFAULT_STANDARD_DATASET_NEGATIVE);
+    expect(resolveDatasetNegativePrompt("instagram-ugc", "  custom only  ")).toBe("custom only");
+    expect(resolveDatasetNegativePrompt("standard", "")).toBe(DEFAULT_STANDARD_DATASET_NEGATIVE);
+  });
+
+  it("treats form LoRA list as authoritative so removals and strengths stick", () => {
+    const master = [
+      { name: "SBBT_B_e46.safetensors", strength: 0.9 },
+      { name: "Cutifier.safetensors", strength: 0.75 },
+      { name: "Krea2_TextFusion_Refusal_Reduction.safetensors", strength: 1 }
+    ];
+    // User removed SBBT + Refusal, lowered Cutifier — must not re-inject master LoRAs.
+    const form = [{ name: "Cutifier.safetensors", strength: 0.45 }];
+    const auth = resolveDatasetLoraHints({ formLoras: form, masterLoras: master, formAuthoritative: true });
+    expect(auth.loras).toEqual([{ name: "Cutifier.safetensors", strength: 0.45 }]);
+    expect(auth.sources.some(s => /edited stack/i.test(s))).toBe(true);
+
+    const cleared = resolveDatasetLoraHints({ formLoras: [], masterLoras: master, formAuthoritative: true });
+    expect(cleared.loras).toEqual([]);
+
+    // Inspect path still seeds from master when form is empty / non-authoritative.
+    const inspect = resolveDatasetLoraHints({ formLoras: [], masterLoras: master, formAuthoritative: false });
+    expect(inspect.loras).toHaveLength(3);
+    const inspectMerge = resolveDatasetLoraHints({
+      formLoras: [{ name: "Extra.safetensors", strength: 0.5 }],
+      masterLoras: master,
+      formAuthoritative: false
+    });
+    expect(inspectMerge.loras.map(l => l.name)).toContain("Extra.safetensors");
+    expect(inspectMerge.loras.map(l => l.name)).toContain("SBBT_B_e46.safetensors");
+  });
+
   it("never mixes a master PNG positive prompt into dataset captions", () => {
     const masterPositive =
       "master only scene with red sports car under neon, unique_master_token_xyz, cyberpunk alley";

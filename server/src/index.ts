@@ -35,7 +35,9 @@ import {
   datasetExtensionSchema,
   datasetIdentityReferenceStrength,
   datasetPrompts,
-  datasetSchema
+  datasetSchema,
+  resolveDatasetLoraHints,
+  resolveDatasetNegativePrompt
 } from "./dataset.js";
 import {
   DEFAULT_PROMPT_LIST_ID,
@@ -861,9 +863,7 @@ app.post("/api/datasets/:id/extend", async (q, r) => {
     const outputSlug = record.outputSlug || datasetOutputSlug(record.name || record.trigger, record.id);
     record.outputSlug = outputSlug;
     const nextPromptIds: string[] = [];
-    const extendNegative = record.datasetMode === "instagram-ugc"
-      ? "different person, changed identity, male, group photo, crowd, deformed face, malformed hands, extra limbs, fused fingers, blurry face, heavy beauty filter, watermark, text overlay, logo, low resolution"
-      : "different person, changed identity, duplicate person, repeated generic pose, static pose, same camera framing, distorted face, malformed hands";
+    const extendNegative = resolveDatasetNegativePrompt(record.datasetMode, record.negativePrompt);
     const registeredLoras = loraRegistry.list();
     // Generation text = promptPlan captions only (list + character). Never master PNG positive prompt.
     const identityStrength = datasetIdentityReferenceStrength(
@@ -1134,7 +1134,9 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
       requestedModel: config.model,
       requestedLoras: config.loras,
       availableModels,
-      availableLoras
+      availableLoras,
+      // Builder list is exact: removing a master LoRA or changing strength must stick.
+      formLorasAuthoritative: true
     });
     const resolvedModel = stack.model || config.model;
     const modelOk =
@@ -1179,14 +1181,12 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
     };
     const id = crypto.randomUUID();
     // Captions come only from datasetPrompts (list + form basePrompt). Master PNG is never a text source.
-    // resolveMasterGenerationStack only supplies model + LoRA names/strengths from metadata.
+    // LoRA stack = Dataset Builder list (authoritative). Model still matched from master metadata when present.
     const prompts = datasetPrompts(configWithStack);
     const clientId = crypto.randomUUID();
     const outputSlug = datasetOutputSlug(config.name || config.trigger, id);
     const promptIds: string[] = [];
-    const datasetNegative = config.datasetMode === "instagram-ugc"
-      ? "different person, changed identity, male, group photo, crowd, deformed face, malformed hands, extra limbs, fused fingers, blurry face, heavy beauty filter, watermark, text overlay, logo, low resolution"
-      : "different person, changed identity, duplicate person, repeated generic pose, static pose, same camera framing, distorted face, malformed hands";
+    const datasetNegative = resolveDatasetNegativePrompt(config.datasetMode, config.negativePrompt);
     const identityStrength = datasetIdentityReferenceStrength(architecture, config.datasetMode);
     for (const item of prompts) {
       let promptText = item.caption;
@@ -1234,14 +1234,15 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
       vae: profile.vae,
       warning: [
         stack.matchedFromMaster
-          ? `Master stack matched: ${stack.note}.`
-          : `Master stack partial/manual — using selected model${stackLoras.length ? ` + ${stackLoras.length} LoRA(s)` : " (no LoRAs)"}. Add LoRAs in Dataset Builder if the master had none in metadata.`,
+          ? `Master model/stack info: ${stack.note}. Generation LoRAs = your edited list (${stackLoras.length}).`
+          : `Using selected model${stackLoras.length ? ` + ${stackLoras.length} LoRA(s) from the builder list` : " (no LoRAs in builder list)"}.`,
         unmatchedNote,
         mismatchedLoras.length ? `LoRA architecture mismatch (applied anyway): ${mismatchedLoras.join(", ")} — model resolved as ${requiredFamily}. Re-verify in LoRA Manager if results look off.` : "",
         architecture === "z-image" ? "Z-Image uses structural guidance; Krea 2 Identity mode gives stronger one-image identity retention." : "",
-        config.datasetMode === "instagram-ugc" ? "Instagram UGC mode: fixed 40-shot lifestyle list. Review outfits and anatomy before LoRA Lab." : ""
+        config.datasetMode === "instagram-ugc" ? "Instagram UGC mode: list + character captions; clothing-aware negative (editable). Review outfits before LoRA Lab." : ""
       ].filter(Boolean).join(" "),
       ...configWithStack,
+      negativePrompt: datasetNegative,
       outputSlug,
       stackNote: stack.note,
       stackSources: stack.sources
@@ -1684,11 +1685,15 @@ function findGalleryStackByImageName(filename: string): { model?: string; loras:
  * Match dataset generation stack to the master image:
  * 1) Gallery record for that filename (model + LoRAs as generated)
  * 2) PNG A1111 parameters / Comment metadata (Model + <lora:…> only — NOT the positive prompt text)
- * 3) Explicit config model/loras as fallback
+ * 3) Explicit form model/loras
  * originalFilename: browser name before multer UUID rename (e.g. z-image_00240_.png)
  *
  * Intentionally ignores the master's positive prompt / scene text so dataset captions
  * stay list + character description only.
+ *
+ * LoRA authority:
+ * - formLorasAuthoritative=true (dataset CREATE): Dataset Builder list is exact — add/remove/strength stick.
+ * - formLorasAuthoritative=false (inspect-master): master fills defaults; form only adds missing extras.
  */
 function resolveMasterGenerationStack(options: {
   masterDiskPath?: string;
@@ -1698,10 +1703,11 @@ function resolveMasterGenerationStack(options: {
   requestedLoras?: Array<{ name: string; strength: number }>;
   availableModels: string[];
   availableLoras: string[];
+  /** When true, form LoRA list fully replaces master LoRAs (Dataset Builder edits must stick). */
+  formLorasAuthoritative?: boolean;
 }): MasterStack {
   const sources: string[] = [];
   let modelHint = options.requestedModel;
-  // Form/manual picks start the list; master PNG + gallery merge in below (master wins on strength for same name).
   const formLoras = Array.isArray(options.requestedLoras) ? [...options.requestedLoras] : [];
   let masterLoras: Array<{ name: string; strength: number }> = [];
 
@@ -1739,7 +1745,7 @@ function resolveMasterGenerationStack(options: {
       if (!sources.some(s => /PNG Model/i.test(s))) sources.push("PNG Model metadata");
     }
     if (parsed.loras.length) {
-      // PNG LoRAs are authoritative when gallery didn't supply any; if gallery did, keep gallery.
+      // PNG LoRAs seed inspect when gallery didn't supply any.
       if (!masterLoras.length) {
         masterLoras = parsed.loras;
         sources.push(`PNG LoRA tags ×${parsed.loras.length}`);
@@ -1747,17 +1753,17 @@ function resolveMasterGenerationStack(options: {
     }
   }
 
-  // Merge: master LoRAs first, then form-only extras (manual add in Dataset Builder).
-  const loraMap = new Map<string, { name: string; strength: number }>();
-  const keyOf = (n: string) => path.basename(n).replace(/\.safetensors$/i, "").toLowerCase();
-  for (const lora of masterLoras) loraMap.set(keyOf(lora.name), lora);
-  for (const lora of formLoras) {
-    const k = keyOf(lora.name);
-    if (!loraMap.has(k)) loraMap.set(k, lora);
+  // Form authoritative on create: user removals/strengths must not be re-injected from master.
+  const formAuthoritative = options.formLorasAuthoritative === true;
+  const hintResult = resolveDatasetLoraHints({
+    formLoras,
+    masterLoras,
+    formAuthoritative
+  });
+  const loraHints = hintResult.loras;
+  for (const s of hintResult.sources) {
+    if (!sources.includes(s)) sources.push(s);
   }
-  const loraHints = [...loraMap.values()];
-  if (formLoras.length && masterLoras.length) sources.push("merged form LoRAs");
-  else if (formLoras.length && !masterLoras.length) sources.push("form LoRAs");
 
   const availableModels = options.availableModels.length ? options.availableModels : modelsFromLocalFallback();
   const availableLoras = options.availableLoras.length ? options.availableLoras : lorasFromLocalFallback();
@@ -1789,7 +1795,7 @@ function resolveMasterGenerationStack(options: {
   return {
     model: matchedModel,
     loras,
-    detectedLoras: loraHints,
+    detectedLoras: formAuthoritative ? loraHints : (masterLoras.length ? masterLoras : loraHints),
     matchedFromMaster,
     sources,
     unmatchedLoras,
@@ -1813,9 +1819,7 @@ function embedCivitaiMetadataForDatasetImage(record: any, imagePath: string, cap
   }, { model: catalog?.sha256, loras: knownLoras });
   return embedCivitaiMetadataInPngFile(imagePath, {
     prompt: caption,
-    negativePrompt: record.datasetMode === "instagram-ugc"
-      ? "different person, changed identity, malformed hands"
-      : "different person, changed identity",
+    negativePrompt: resolveDatasetNegativePrompt(record.datasetMode, record.negativePrompt),
     width: record.width,
     height: record.height,
     seed: seed ?? record.seed,

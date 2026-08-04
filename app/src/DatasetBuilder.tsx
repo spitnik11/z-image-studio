@@ -16,6 +16,22 @@ type DatasetJob = {
 type DatasetMode = "standard" | "instagram-ugc";
 type PromptOrder = "sequential" | "shuffle";
 type PromptListDoc = { id: string; name: string; version: number; description?: string; prompts: string[]; updatedAt?: string };
+
+/** Mirrors server DEFAULT_*_DATASET_NEGATIVE — keep in sync with server/src/dataset.ts */
+const DEFAULT_STANDARD_NEGATIVE =
+  "different person, changed identity, duplicate person, repeated generic pose, static pose, same camera framing, distorted face, malformed hands";
+const DEFAULT_INSTAGRAM_UGC_NEGATIVE = [
+  "different person, changed identity, male, group photo, crowd",
+  "deformed face, malformed hands, extra limbs, fused fingers, blurry face",
+  "heavy beauty filter, watermark, text overlay, logo, low resolution",
+  "nude, naked, fully nude, topless, bottomless, unclothed, no clothes, removed clothes",
+  "exposed breasts, nipples, areola, genitals, pubic hair",
+  "see-through, transparent clothing, sheer fabric, lingerie only, underwear only",
+  "bikini only, wardrobe malfunction, clothing pulled down, missing clothes"
+].join(", ");
+function defaultNegativeForMode(mode: DatasetMode) {
+  return mode === "instagram-ugc" ? DEFAULT_INSTAGRAM_UGC_NEGATIVE : DEFAULT_STANDARD_NEGATIVE;
+}
 type MasterStackInfo = {
   model?: string;
   loras: Array<{ name: string; strength: number }>;
@@ -84,6 +100,8 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
   const [varyOutfits, setVaryOutfits] = useState(true);
   const [varyBackgrounds, setVaryBackgrounds] = useState(true);
   const [characterAdjustments, setCharacterAdjustments] = useState<CharacterAdjustments>({ hair: "", body: "", other: "" });
+  /** Editable negative for every dataset shot (defaults change with mode). */
+  const [negativePrompt, setNegativePrompt] = useState(DEFAULT_STANDARD_NEGATIVE);
   const [presetMaster,setPresetMaster]=useState("");
   const [reviewJob, setReviewJob] = useState<DatasetJob>();
   const active = submitting || jobs.some(job => ["pending", "active", "paused"].includes(job.status));
@@ -283,7 +301,9 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
       datasetMode,
       promptOrder: datasetMode === "instagram-ugc" ? promptOrder : "sequential",
       promptListId: "instagram-ugc",
+      // Authoritative stack: server must not re-inject master LoRAs the user removed.
       loras: datasetLoras,
+      negativePrompt: negativePrompt.trim() || defaultNegativeForMode(datasetMode),
       promptMatrix: { ...matrix, varyOutfits, varyBackgrounds }
     }));
     try {
@@ -359,6 +379,13 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
       <label>Dataset mode<select value={datasetMode} onChange={event => {
         const mode = event.target.value as DatasetMode;
         setDatasetMode(mode);
+        setNegativePrompt(current => {
+          const wasDefault =
+            !current.trim() ||
+            current === DEFAULT_STANDARD_NEGATIVE ||
+            current === DEFAULT_INSTAGRAM_UGC_NEGATIVE;
+          return wasDefault ? defaultNegativeForMode(mode) : current;
+        });
         if (mode === "instagram-ugc") {
           setCount(40);
           setCaptionStrategy("flexible-character");
@@ -374,7 +401,7 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
       </select></label>
       <div className="dataset-lora-stack">
         <div className="section-title"><span>LoRAs for dataset</span><small>{datasetLoras.length} active</small><button type="button" onClick={() => refreshDatasetLoras(model)} aria-label="Refresh LoRAs" title="Refresh LoRAs"><RefreshCw size={14}/></button></div>
-        <p className="dataset-lora-help">Optional. Auto-filled from the master image when metadata is present; you can always add or remove LoRAs here. Same model + LoRA stack is used for every dataset shot.</p>
+        <p className="dataset-lora-help">Optional. Auto-filled from the master when metadata is present. <strong>Your list is what generates</strong> — add, remove, or change strength before Build; removals are not re-added from the master.</p>
         <div className="lora-add dataset-lora-add">
           <select aria-label="Available LoRA" value={loraPick} onChange={event => setLoraPick(event.target.value)}>
             <option value="">Choose a LoRA</option>
@@ -410,6 +437,29 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
         </div>
       )}
       <label>Character description<textarea value={basePrompt} onChange={event => setBasePrompt(event.target.value)} placeholder="Stable identity only — face, hair, body. Outfits come from the shot list in Instagram mode."/></label>
+      <label className="dataset-negative-field">Negative prompt
+        <textarea
+          value={negativePrompt}
+          onChange={event => setNegativePrompt(event.target.value)}
+          rows={4}
+          placeholder="Terms to push away (identity, hands, nude, sheer fabric…)"
+        />
+        <div className="dataset-negative-actions">
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => setNegativePrompt(defaultNegativeForMode(datasetMode))}
+            title="Restore mode default negative"
+          >
+            Reset to default
+          </button>
+          <small className="dataset-seed-hint">
+            {datasetMode === "instagram-ugc"
+              ? "Instagram default includes clothing-coverage / anti-nude terms. Edit freely; empty falls back to server defaults."
+              : "Standard default focuses on identity and pose variety. Switch to Instagram mode for clothing-aware defaults."}
+          </small>
+        </div>
+      </label>
       <details className="character-adjustments">
         <summary>Character adjustments <span>Optional</span></summary>
         <p>Use these only for deliberate traits the whole dataset should learn. They affect generated images and captions, but do not overwrite the saved Character profile.</p>

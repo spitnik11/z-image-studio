@@ -5515,3 +5515,35 @@ button.stop-dataset:hover{background:color-mix(in srgb,#ff6b6b 28%,transparent)}
   color: #8b9087;
   line-height: 1.35;
 }
+
+/* Dataset Builder — editable negative */
+.dataset-negative-field textarea {
+  min-height: 88px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.dataset-negative-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+}
+.dataset-negative-actions button.ghost {
+  border: 1px solid #303743;
+  border-radius: 8px;
+  background: #161b22;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.dataset-negative-actions button.ghost:hover {
+  border-color: #4a5568;
+  color: #d7f75d;
+}
+.dataset-negative-actions .dataset-seed-hint {
+  flex: 1;
+  min-width: 160px;
+  margin-top: 0;
+}
