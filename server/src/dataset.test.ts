@@ -89,9 +89,11 @@ describe("Dataset Builder", () => {
   it("builds Instagram UGC mode from the editable 40-prompt JSON list in order", () => {
     const shots = getInstagramUgcShots(projectRoot);
     expect(getInstagramUgcShotCount(projectRoot)).toBe(40);
-    expect(shots[0]).toMatch(/Raw photo/i);
+    expect(shots[0]).toMatch(/Casual amateur phone snapshot/i);
     expect(shots[0]).toMatch(/lili doe/i);
+    expect(shots[0]).toMatch(/pajama/i);
     expect(shots[39]).toMatch(/full frontal/i);
+    expect(shots[39]).toMatch(/yoga tank/i);
     const liliDesc =
       "lili doe, a young woman in her early twenties with the soft freckled doe-eyed look of a Belle Delphine-inspired Instagram model, large brown doe eyes, soft pouty lips, delicate freckles across pale cheeks and nose, long soft dark brown curly hair falling in loose waves over her shoulders and down her back, slender waist, large perfectly rounded curvy ass, C-cup breasts, natural skin texture with visible pores and freckles, playful teasing expression that shifts between innocent “hi” smiles and subtle flirty pouts";
     const input = datasetSchema.parse({
@@ -104,8 +106,8 @@ describe("Dataset Builder", () => {
     // One unique full prompt per image, sequential list indices 0..39
     expect(prompts.map(p => p.listIndex)).toEqual(Array.from({ length: 40 }, (_, i) => i));
     expect(new Set(prompts.map(p => p.caption)).size).toBe(40);
-    expect(prompts[0].caption).toContain("mirror selfie");
-    expect(prompts[0].caption).toMatch(/Raw photo/i);
+    expect(prompts[0].caption).toContain("pajama");
+    expect(prompts[0].caption).toMatch(/Casual amateur phone snapshot/i);
     expect((prompts[0].tags as Record<string, string>).mode).toBe("instagram-ugc");
     expect((prompts[0].tags as Record<string, string>).order).toBe("sequential");
     expect(prompts.some(item => item.tags.framing === "close-up headshot")).toBe(true);
@@ -117,12 +119,12 @@ describe("Dataset Builder", () => {
       const marker = "character features:";
       expect(caption.includes(marker)).toBe(true);
       const [listPart, characterPart] = caption.split(marker);
-      expect(listPart.toLowerCase()).toContain("raw photo");
+      expect(listPart.toLowerCase()).toContain("casual amateur phone snapshot");
       expect(characterPart.toLowerCase()).toContain("lili doe");
       expect(characterPart.toLowerCase()).toContain("c-cup");
       expect(characterPart.toLowerCase()).toContain("curvy ass");
       // List half comes first
-      expect(caption.indexOf("Raw photo")).toBeLessThan(caption.indexOf(marker));
+      expect(caption.indexOf("Casual amateur")).toBeLessThan(caption.indexOf(marker));
       // Character half is after the list prompt
       expect(caption.indexOf(marker)).toBeGreaterThan(listPart.length - 1);
     }

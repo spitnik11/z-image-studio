@@ -8,8 +8,9 @@ import { datasetPrompts, datasetSchema, getInstagramUgcShots } from "../server/s
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const shots = getInstagramUgcShots(root);
 console.log("list length", shots.length);
-console.log("first starts raw", /^Raw photo/i.test(shots[0]));
+console.log("first starts casual amateur", /^Casual amateur phone snapshot/i.test(shots[0]));
 console.log("has lili doe", shots.every(s => /lili doe/i.test(s)));
+console.log("version cues", /pajama/i.test(shots[0]), /yoga tank/i.test(shots[39]));
 
 const sequential = datasetPrompts(datasetSchema.parse({
   name: "Verify",
@@ -31,12 +32,14 @@ const ok =
   shots.length === 40 &&
   indices.every((v, i) => v === i) &&
   uniqueCaptions === 40 &&
-  sequential.every((p, i) => p.caption.includes(shots[i].slice(0, 30)));
+  sequential.every((p, i) => p.caption.includes(shots[i].slice(0, 30))) &&
+  /^Casual amateur/i.test(shots[0]) &&
+  /full frontal/i.test(shots[39]);
 
 console.log({
   sequentialIndices: indices.slice(0, 5).join(",") + "...",
   uniqueCaptions,
-  img0_mirror: /mirror selfie/i.test(sequential[0].caption),
+  img0_pajama: /pajama/i.test(sequential[0].caption),
   img39_frontal: /full frontal/i.test(sequential[39].caption),
   ok
 });

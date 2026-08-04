@@ -25,10 +25,13 @@ describe("dataset prompt lists", () => {
     const projectRoot = path.resolve(process.cwd(), "..");
     const list = loadPromptList(projectRoot, "instagram-ugc");
     expect(list.prompts.length).toBe(40);
-    expect(list.prompts[0]).toMatch(/Raw photo/i);
+    expect(list.version).toBeGreaterThanOrEqual(3);
+    expect(list.prompts[0]).toMatch(/Casual amateur phone snapshot/i);
     expect(list.prompts[0]).toMatch(/lili doe/i);
-    expect(list.prompts[0]).toMatch(/close-up pouty mirror selfie/i);
+    expect(list.prompts[0]).toMatch(/blush-pink cotton pajama/i);
+    expect(list.prompts[0]).toMatch(/close-up pouty/i);
     expect(list.prompts[39]).toMatch(/full-body standing full frontal/i);
+    expect(list.prompts[39]).toMatch(/opaque white yoga tank/i);
   });
 
   it("replaces prompts via save path for manual updates", () => {
@@ -93,14 +96,14 @@ describe("dataset prompt lists", () => {
     // Each image gets a different list index in order
     expect(prompts.map(p => p.listIndex)).toEqual(Array.from({ length: 40 }, (_, i) => i));
     // Captions are the full generation prompts (not only short shot tags)
-    expect(prompts[0].caption).toMatch(/Raw photo/i);
-    expect(prompts[0].caption).toMatch(/mirror selfie/i);
+    expect(prompts[0].caption).toMatch(/Casual amateur phone snapshot/i);
+    expect(prompts[0].caption).toMatch(/pajama/i);
     expect(prompts[11].caption).toMatch(/kneeling on bed/i);
     expect(prompts[39].caption).toMatch(/full frontal/i);
     // Unique captions across the batch
     expect(new Set(prompts.map(p => p.caption)).size).toBe(40);
     // Trigger already in prompt body — avoid heavy double-prefix of basePrompt noise
-    expect(prompts[0].caption.startsWith("Raw photo") || prompts[0].caption.includes("lili doe")).toBe(true);
+    expect(prompts[0].caption.startsWith("Casual amateur") || prompts[0].caption.includes("lili doe")).toBe(true);
   });
 
   it("datasetPrompts shuffle still yields 40 unique prompts per full pass", () => {
