@@ -112,8 +112,10 @@ describe("Dataset Builder", () => {
     expect(prompts[0].caption).toMatch(/Casual amateur phone snapshot/i);
     expect((prompts[0].tags as Record<string, string>).mode).toBe("instagram-ugc");
     expect((prompts[0].tags as Record<string, string>).order).toBe("sequential");
-    expect(prompts.some(item => item.tags.framing === "close-up headshot")).toBe(true);
-    expect(prompts.some(item => item.tags.framing === "full-body view")).toBe(true);
+    // v6 streamer list uses angle language (low/high/Dutch) more than classic close-up/full-body labels
+    expect(prompts.every(item => item.tags.mode === "instagram-ugc")).toBe(true);
+    expect(prompts.some(item => /low angle|high angle|overhead|Dutch/i.test(item.caption))).toBe(true);
+    expect(prompts.some(item => /full frontal|standing full|standing with/i.test(item.caption))).toBe(true);
 
     // Structure: first half = list prompt, second half = character features
     for (const item of prompts) {
