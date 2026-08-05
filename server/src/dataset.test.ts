@@ -113,7 +113,7 @@ describe("Dataset Builder", () => {
     expect((prompts[0].tags as Record<string, string>).mode).toBe("instagram-ugc");
     expect((prompts[0].tags as Record<string, string>).order).toBe("sequential");
     // v6 streamer list uses angle language (low/high/Dutch) more than classic close-up/full-body labels
-    expect(prompts.every(item => item.tags.mode === "instagram-ugc")).toBe(true);
+    expect(prompts.every(item => (item.tags as Record<string, string>).mode === "instagram-ugc")).toBe(true);
     expect(prompts.some(item => /low angle|high angle|overhead|Dutch/i.test(item.caption))).toBe(true);
     expect(prompts.some(item => /full frontal|standing full|standing with/i.test(item.caption))).toBe(true);
 

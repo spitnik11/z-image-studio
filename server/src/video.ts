@@ -37,6 +37,48 @@ export const videoGenerationSchema = z.object({
 
 export type VideoGeneration = z.infer<typeof videoGenerationSchema>;
 
+/**
+ * Canvas presets for SCAIL-2. Official training/docs use 512p and 704p; both W and H must be ÷32.
+ * True 720p height (720) is NOT divisible by 32 — use 704×1280 as the near-720p 9:16 class.
+ * True 9:16 ÷32 options: 576×1024, 640×1152, 704×1248 (we prefer 704×1280 for 704p class).
+ */
+export const VIDEO_CANVAS_PRESETS = [
+  { id: "safe-square", label: "Safe square", width: 512, height: 512, note: "12 GB start" },
+  { id: "512-tall", label: "512p tall", width: 512, height: 896, note: "portrait" },
+  { id: "9-16-576", label: "9:16 576p", width: 576, height: 1024, note: "exact 9:16" },
+  { id: "9-16-640", label: "9:16 640p", width: 640, height: 1152, note: "exact 9:16" },
+  { id: "9-16-704", label: "9:16 ~720p", width: 704, height: 1280, note: "704p class · social" },
+  { id: "512-wide", label: "512p wide", width: 896, height: 512, note: "landscape" },
+  { id: "704-wide", label: "704p wide", width: 1280, height: 704, note: "landscape HD" }
+] as const;
+
+/** Social / duration shortcuts: frameCount is always 4n+1 in [9, 81]. */
+export const VIDEO_MOTION_PRESETS = [
+  { id: "16fps-short", label: "16 fps · short", fps: 16, frameCount: 17, note: "~1.1 s · light" },
+  { id: "30fps-1s", label: "30 fps · ~1 s", fps: 30, frameCount: 29, note: "social short" },
+  { id: "30fps-2s", label: "30 fps · ~2 s", fps: 30, frameCount: 61, note: "heavier" },
+  { id: "30fps-max", label: "30 fps · max", fps: 30, frameCount: 81, note: "~2.7 s · max length" }
+] as const;
+
+/** Nearest valid SCAIL frame count (9, 13, … 81) for a target duration at fps. */
+export function scailFrameCountForSeconds(seconds: number, fps: number): number {
+  const target = Math.max(1, seconds) * Math.max(1, fps);
+  let best = 9;
+  for (let frames = 9; frames <= 81; frames += 4) {
+    if (Math.abs(frames - target) < Math.abs(best - target)) best = frames;
+  }
+  return best;
+}
+
+export function videoSeconds(frameCount: number, fps: number): number {
+  return frameCount / Math.max(1, fps);
+}
+
+/** Rough 12 GB workload flag: pixels × frames × steps. */
+export function isHeavyVideoWorkload(width: number, height: number, frameCount: number, steps: number): boolean {
+  return width * height * frameCount * steps > 512 * 896 * 33 * 40;
+}
+
 export const SCAIL_FILES = {
   model: "wan2.1_14B_SCAIL_2_mxfp8.safetensors",
   textEncoder: "umt5_xxl_fp8_e4m3fn_scaled.safetensors",

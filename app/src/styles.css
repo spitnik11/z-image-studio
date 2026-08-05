@@ -5576,3 +5576,46 @@ button.stop-dataset:hover{background:color-mix(in srgb,#ff6b6b 28%,transparent)}
   border-color: #4a5568;
   color: #d7f75d;
 }
+
+/* SCAIL video — gallery handoff + presets */
+.use-gallery-photo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid #b4ff5059;
+  border-radius: 10px;
+  background: #b4ff5014;
+  color: #e8ffb0;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  text-align: left;
+}
+.use-gallery-photo:hover {
+  border-color: #b4ff50a6;
+  background: #b4ff5024;
+}
+.gallery-ref-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.gallery-ref-banner .ghost {
+  margin-left: auto;
+  border: 1px solid #303743;
+  border-radius: 8px;
+  background: #161b22;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+.file-pick-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: #8b9087;
+  font-weight: 500;
+}

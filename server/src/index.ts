@@ -1526,6 +1526,28 @@ app.post("/api/video/generate", upload.fields([
     }
     const source = q.body.sourceRecordId ? records.find(record => record.id === q.body.sourceRecordId && record.mediaType === "video") as any : undefined;
     const relative = (field: string, previous?: string) => files?.[field]?.[0] ? `z-image-studio/${files[field][0].filename}` : previous;
+
+    // Photo → video handoff: copy a completed gallery PNG into Comfy input as the character reference.
+    let galleryReference: string | undefined;
+    const galleryImage = String(q.body.galleryImage || "").trim();
+    if (galleryImage && !files?.reference?.[0]) {
+      if (galleryImage.includes("..") || path.isAbsolute(galleryImage)) {
+        throw new Error("Invalid gallery image path.");
+      }
+      const gallerySub = String(q.body.gallerySubfolder || "");
+      if (gallerySub.includes("..")) throw new Error("Invalid gallery subfolder.");
+      const sourcePath = safeOutputPath(settings.outputDirectory, galleryImage, gallerySub);
+      if (!fs.existsSync(sourcePath)) {
+        throw new Error("Gallery reference image was not found in the ComfyUI output folder. Re-select the photo or upload a reference file.");
+      }
+      fs.mkdirSync(uploadRoot, { recursive: true });
+      const ext = path.extname(galleryImage).toLowerCase() || ".png";
+      const destName = `video-ref-${crypto.randomUUID()}${ext}`;
+      const destPath = path.join(uploadRoot, destName);
+      fs.copyFileSync(sourcePath, destPath);
+      galleryReference = `z-image-studio/${destName}`;
+    }
+
     const raw = {
       ...q.body,
       width: Number(q.body.width), height: Number(q.body.height), frameCount: Number(q.body.frameCount),
@@ -1533,7 +1555,7 @@ app.post("/api/video/generate", upload.fields([
       guidance: Number(q.body.guidance), poseStrength: Number(q.body.poseStrength),
       poseStart: Number(q.body.poseStart), poseEnd: Number(q.body.poseEnd),
       automaticPreprocessing: q.body.automaticPreprocessing === "true",
-      referenceImage: relative("reference", source?.inputs?.referenceImage),
+      referenceImage: relative("reference", galleryReference || source?.inputs?.referenceImage),
       drivingVideo: relative("driving", source?.inputs?.drivingVideo),
       referenceMask: relative("referenceMask", source?.inputs?.referenceMask),
       drivingMask: relative("drivingMask", source?.inputs?.drivingMask)

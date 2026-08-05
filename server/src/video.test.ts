@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { buildVideoWorkflow, videoGenerationSchema } from "./video.js";
+import {
+  buildVideoWorkflow,
+  isHeavyVideoWorkload,
+  scailFrameCountForSeconds,
+  VIDEO_CANVAS_PRESETS,
+  VIDEO_MOTION_PRESETS,
+  videoGenerationSchema,
+  videoSeconds
+} from "./video.js";
 
 const valid = {
   prompt: "A woman in a red jacket dances in a softly lit studio.",
@@ -44,5 +52,39 @@ describe("SCAIL workflow", () => {
     expect(workflow["17"].class_type).toBe("ImageScale");
     expect(workflow["18"].inputs.reference_image_mask).toEqual(["13", 0]);
     expect(Object.values(workflow).some(node => node.class_type === "SAM3_VideoTrack")).toBe(false);
+  });
+  it("builds 9:16 ~720p (704×1280) at 30 fps with valid frame counts", () => {
+    const social = videoGenerationSchema.parse({
+      ...valid, width: 704, height: 1280, fps: 30, frameCount: 29
+    });
+    expect(social.width % 32).toBe(0);
+    expect(social.height % 32).toBe(0);
+    expect(social.fps).toBe(30);
+    const workflow = buildVideoWorkflow(social);
+    expect(workflow["18"].inputs.width).toBe(704);
+    expect(workflow["18"].inputs.height).toBe(1280);
+    expect(workflow["18"].inputs.length).toBe(29);
+    expect(workflow["22"].inputs.fps).toBe(30);
+  });
+});
+
+describe("video presets helpers", () => {
+  it("exposes 9:16 and 704p canvas presets with ÷32 dimensions", () => {
+    const tall = VIDEO_CANVAS_PRESETS.find(item => item.id === "9-16-704");
+    expect(tall).toMatchObject({ width: 704, height: 1280 });
+    for (const preset of VIDEO_CANVAS_PRESETS) {
+      expect(preset.width % 32).toBe(0);
+      expect(preset.height % 32).toBe(0);
+    }
+  });
+  it("maps durations to SCAIL 4n+1 frame counts and 30 fps presets", () => {
+    expect(scailFrameCountForSeconds(1, 30)).toBe(29);
+    expect(scailFrameCountForSeconds(2, 30)).toBe(61);
+    expect(VIDEO_MOTION_PRESETS.some(item => item.fps === 30 && item.frameCount === 29)).toBe(true);
+    expect(videoSeconds(29, 30)).toBeCloseTo(0.966, 2);
+  });
+  it("flags heavy 704p long clips for 12 GB guidance", () => {
+    expect(isHeavyVideoWorkload(704, 1280, 61, 40)).toBe(true);
+    expect(isHeavyVideoWorkload(512, 512, 17, 40)).toBe(false);
   });
 });

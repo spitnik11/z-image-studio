@@ -179,11 +179,24 @@ Edit for identity, Krea Depth or Z-Image SDPose/ControlNet for pose, and Impact 
 refinement. Control strength is supported; these native adapters do not expose ControlNet's
 SDXL-style ending-percent input.
 
-## SCAIL-2 video mode
+## SCAIL-2 video mode (image → motion video)
 
-Choose **Video** at the top of the Create panel. Upload one reference image and a driving video, describe the completed video, choose a canvas and duration, then generate an MP4. Animation preserves the reference character; Replacement places that character into the driving performance.
+Choose **Video** at the top of the Create panel — or open a completed Photo and click **Animate with SCAIL**.
 
-Automatic preprocessing uses the bundled SAM3 nodes to create identity-aware masks. Turn it off to upload a reference mask and driving mask yourself. In both cases, black removes background, white preserves it, and matching non-white colors identify corresponding subjects. The Studio validates file types, dimensions, frame limits, model availability, node availability, disk space, GPU visibility, and FFmpeg before queueing.
+### Recommended social path (30 fps · 9:16 ~720p)
+
+1. **Photo** — generate your character (Krea/Z-Image) as a clear full-body or waist-up still.
+2. **Animate with SCAIL** on that result (or Video → “Use selected photo as character”).
+3. Upload a **driving motion video** (single subject, clear body motion).
+4. Task: **Animation**. Masks: **automatic SAM 3.1** (default).
+5. Canvas: **9:16 ~720p** (704×1280). SCAIL needs sides ÷32 — true 720 is invalid; 704p is the official HD class.
+6. Motion: **30 fps · ~1 s** (29 frames) first; raise to 61/81 frames only if VRAM allows.
+7. Prompt: describe the finished video (identity, clothes, action, place) — not “make her copy this dance.”
+8. Generate MP4.
+
+Animation preserves the reference character; Replacement places that character into the driving performance.
+
+Automatic preprocessing uses the bundled SAM3 nodes to create identity-aware masks. Turn it off to upload a reference mask and driving-mask video yourself. Black removes background, white preserves it, and matching colors identify subjects.
 
 Video models live separately from photo models:
 
@@ -195,9 +208,9 @@ Z:\codex app\video-models\clip_vision\clip_vision_h.safetensors
 Z:\codex app\video-models\checkpoints\sam3.1_multiplex_fp16.safetensors
 ```
 
-The default is the official lower-memory MXFP8 diffusion model. Video inference is still demanding on a 12 GB GPU, so start with 512×512 and 9 or 17 frames. Keep the desktop shortcut as the normal launcher; it starts the same ComfyUI instance and discovers both photo and video models through `extra_model_paths.yaml`.
+Default model: official lower-memory **MXFP8**. On 12 GB VRAM, prefer 576×1024 or 512×896 before long 704×1280 clips. Keep the desktop shortcut as the normal launcher.
 
-If Video says setup is incomplete, leave the app open for a few seconds—the readiness panel refreshes automatically. Check the named missing item there, verify ComfyUI at `http://127.0.0.1:8188`, then restart the desktop shortcut after adding models.
+If Video says setup is incomplete, wait for the readiness panel refresh, verify ComfyUI at `http://127.0.0.1:8188`, then restart the desktop shortcut after adding models.
 
 ## Safety
 
