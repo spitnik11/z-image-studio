@@ -92,11 +92,9 @@ describe("Dataset Builder", () => {
     expect(getInstagramUgcShotCount(projectRoot)).toBe(40);
     expect(shots[0]).toMatch(/Casual amateur phone snapshot/i);
     expect(shots[0]).toMatch(/lili doe/i);
-    expect(shots[0]).toMatch(/messy bedhead/i);
-    expect(shots[0]).toMatch(/pajama/i);
-    expect(shots[0]).toMatch(/exaggerated pout/i);
-    expect(shots[39]).toMatch(/full frontal/i);
-    expect(shots[39]).toMatch(/volume at the crown/i);
+    expect(shots[0]).toMatch(/dolphin shorts/i);
+    expect(shots[0]).toMatch(/streamer room/i);
+    expect(shots[39]).toMatch(/dolphin shorts/i);
     expect(shots[39]).toMatch(/mischievous smirk/i);
     const liliDesc =
       "lili doe, a young woman in her early twenties with the soft freckled doe-eyed look of a Belle Delphine-inspired Instagram model, large brown doe eyes, soft pouty lips, delicate freckles across pale cheeks and nose, long soft dark brown curly hair falling in loose waves over her shoulders and down her back, slender waist, large perfectly rounded curvy ass, C-cup breasts, natural skin texture with visible pores and freckles, playful teasing expression that shifts between innocent “hi” smiles and subtle flirty pouts";
@@ -110,7 +108,7 @@ describe("Dataset Builder", () => {
     // One unique full prompt per image, sequential list indices 0..39
     expect(prompts.map(p => p.listIndex)).toEqual(Array.from({ length: 40 }, (_, i) => i));
     expect(new Set(prompts.map(p => p.caption)).size).toBe(40);
-    expect(prompts[0].caption).toContain("pajama");
+    expect(prompts[0].caption).toMatch(/dolphin shorts/i);
     expect(prompts[0].caption).toMatch(/Casual amateur phone snapshot/i);
     expect((prompts[0].tags as Record<string, string>).mode).toBe("instagram-ugc");
     expect((prompts[0].tags as Record<string, string>).order).toBe("sequential");

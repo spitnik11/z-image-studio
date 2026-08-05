@@ -25,14 +25,14 @@ describe("dataset prompt lists", () => {
     const projectRoot = path.resolve(process.cwd(), "..");
     const list = loadPromptList(projectRoot, "instagram-ugc");
     expect(list.prompts.length).toBe(40);
-    expect(list.version).toBeGreaterThanOrEqual(5);
+    expect(list.version).toBeGreaterThanOrEqual(6);
     expect(list.prompts[0]).toMatch(/Casual amateur phone snapshot/i);
     expect(list.prompts[0]).toMatch(/lili doe/i);
-    expect(list.prompts[0]).toMatch(/messy bedhead/i);
-    expect(list.prompts[0]).toMatch(/blush-pink cotton pajama/i);
-    expect(list.prompts[0]).toMatch(/exaggerated pout/i);
-    expect(list.prompts[39]).toMatch(/full-body standing full frontal/i);
-    expect(list.prompts[39]).toMatch(/volume at the crown/i);
+    expect(list.prompts[0]).toMatch(/dolphin shorts/i);
+    expect(list.prompts[0]).toMatch(/streamer room/i);
+    expect(list.prompts[0]).toMatch(/gaming chair/i);
+    expect(list.prompts[39]).toMatch(/dolphin shorts/i);
+    expect(list.prompts[39]).toMatch(/gaming setup|streamer room/i);
     expect(list.prompts[39]).toMatch(/mischievous smirk/i);
   });
 
@@ -99,9 +99,9 @@ describe("dataset prompt lists", () => {
     expect(prompts.map(p => p.listIndex)).toEqual(Array.from({ length: 40 }, (_, i) => i));
     // Captions are the full generation prompts (not only short shot tags)
     expect(prompts[0].caption).toMatch(/Casual amateur phone snapshot/i);
-    expect(prompts[0].caption).toMatch(/pajama/i);
-    expect(prompts[11].caption).toMatch(/kneeling on bed/i);
-    expect(prompts[39].caption).toMatch(/full frontal/i);
+    expect(prompts[0].caption).toMatch(/dolphin shorts/i);
+    expect(prompts[11].caption).toMatch(/gaming|desk|streamer|dolphin/i);
+    expect(prompts[39].caption).toMatch(/mischievous smirk|gaming setup/i);
     // Unique captions across the batch
     expect(new Set(prompts.map(p => p.caption)).size).toBe(40);
     // Trigger already in prompt body — avoid heavy double-prefix of basePrompt noise
