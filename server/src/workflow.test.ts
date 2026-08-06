@@ -61,6 +61,26 @@ describe("workflow inputs", () => {
     expect(w["7"]).toBeUndefined();
     expect(template["7"].class_type).toBe("ModelSamplingAuraFlow");
   });
+  it("generates high-resolution Krea 2 canvases (1530x2048 and 2048x2048) with exact output size and tiled decode", () => {
+    for (const [width, height] of [[1530, 2048], [2048, 2048]] as const) {
+      expect(generationSchema.parse({ ...valid, width, height }).width).toBe(width);
+      const w = buildWorkflow(template, {
+        ...valid, diffusionModel: "krea2TurboINT8.safetensors",
+        textEncoder: "qwen3vl_4b_fp8_scaled.safetensors", vae: "qwen_image_vae.safetensors",
+        width, height
+      });
+      expect(w["2"].inputs.type).toBe("krea2");
+      expect(w["6"].class_type).toBe("EmptyLatentImage");
+      expect(w["6"].inputs.width).toBe(width);
+      expect(w["6"].inputs.height).toBe(height);
+      expect(w["8"].inputs.sampler_name).toBe("euler");
+      expect(w["9"].class_type).toBe("VAEDecodeTiled");     // >2.07 MP → VRAM-safe tiled decode
+      expect(w["11"].inputs.width).toBe(width);             // exact requested output after decode
+      expect(w["11"].inputs.height).toBe(height);
+      expect(w["10"].inputs.images).toEqual(["11", 0]);
+    }
+    expect(() => generationSchema.parse({ ...valid, width: 2049, height: 2048 })).toThrow();
+  });
   it("classifies Anima diffusion filenames and rejects companion TE/VAE names", () => {
     expect(modelArchitecture("anima_baseV10.safetensors")).toBe("anima");
     expect(modelArchitecture("anima-base-v1.0.safetensors")).toBe("anima");

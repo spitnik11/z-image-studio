@@ -26,7 +26,7 @@ type RecordItem={id:string;promptId:string;mediaType?:"photo"|"video";prompt:str
 type ModelItem={name:string;displayName?:string;displayFamily?:string;loraArchitecture?:"z-image"|"krea2"|"illustrious"|"anima"|"pony"|"unknown";architecture:"z-image"|"krea2"|"illustrious"|"anima"|"unknown";recommended?:{steps:number;guidance:number;sampler:Sampler;scheduler:Scheduler};usageGuide?:string;licenseNotes?:string};
 type Diagnostics={connected:boolean;error?:string;missingNodes?:string[];models?:Record<string,boolean>;capabilities?:Partial<Record<"z-image"|"krea2"|"illustrious",ReferenceCapability[]>>;manifest?:Array<{id:string;label:string;architecture:string;role:string;installed:boolean;location:string;filename?:string;required:boolean;gated?:boolean}>};
 const defaults={prompt:"",negativePrompt:"",width:1024,height:1024,seed:0,steps:8,guidance:1,batchSize:1,priority:"normal" as Priority,outputFormat:"png" as OutputFormat,sampler:"res_multistep" as Sampler,scheduler:"simple" as Scheduler,outputName:"z-image",neuralUpscale:false,upscaleModel:DEFAULT_UPSCALE_MODEL};
-const ratios=[["Square",1024,1024],["Portrait 9:16",1080,1920],["Landscape",1536,1024],["Cinema 16:9",1920,1080]] as const;
+const ratios=[["Square",1024,1024],["Portrait 9:16",1080,1920],["Portrait 3:4",1530,2048],["Landscape",1536,1024],["Cinema 16:9",1920,1080]] as const;
 async function api<T>(url:string, init?:RequestInit):Promise<T>{const r=await fetch(url,{headers:{"content-type":"application/json"},...init});if(!r.ok){const x=await r.json().catch(()=>({}));throw new Error(x.error||`Request failed (${r.status})`)}return r.status===204?undefined as T:r.json()}
 
 function App(){
