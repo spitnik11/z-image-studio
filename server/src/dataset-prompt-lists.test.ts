@@ -14,6 +14,7 @@ import {
   datasetSchema,
   resolveDatasetNegativePrompt,
   DEFAULT_NYX_LATEX_FETISH_NEGATIVE,
+  DEFAULT_NYX_DOMINATION_NEGATIVE,
   DEFAULT_INSTAGRAM_UGC_NEGATIVE
 } from "./dataset.js";
 
@@ -268,6 +269,90 @@ describe("dataset prompt lists", () => {
       name: "Custom Mode", trigger: "tok", model: "m.safetensors", basePrompt: "id",
       count: 12, width: 512, height: 768, seed: 1, datasetMode: "my-custom-set", projectRoot
     }).datasetMode).toBe("my-custom-set");
+  });
+
+  it("Nyx choke catalog mode loads 11 prompts from choke.docx and wraps separately", () => {
+    const projectRoot = path.resolve(process.cwd(), "..");
+    const list = loadPromptList(projectRoot, "nyx-choke");
+    expect(list.id).toBe("nyx-choke");
+    expect(list.prompts.length).toBe(11);
+    expect(list.prompts[0]).toMatch(/grip his throat|Dominating Choke|windpipe/i);
+    expect(list.prompts[1]).toMatch(/sleeper hold/i);
+    expect(list.prompts[8]).toMatch(/Snot and drool|close-up of the young man's face/i);
+    // Separate from domination + latex
+    const dom = loadPromptList(projectRoot, "nyx-domination");
+    const latex = loadPromptList(projectRoot, "nyx-latex-fetish");
+    expect(list.prompts[0]).not.toBe(dom.prompts[0]);
+    expect(list.prompts[0]).not.toBe(latex.prompts[0]);
+
+    const input = datasetSchema.parse({
+      name: "Nyx Choke Set",
+      trigger: "nyx",
+      model: "krea2.safetensors",
+      basePrompt: "photorealistic adult woman Nyx latex",
+      count: 12,
+      width: 512,
+      height: 768,
+      seed: 3,
+      datasetMode: "nyx-choke",
+      promptOrder: "sequential",
+      promptListId: "instagram-ugc",
+      projectRoot
+    });
+    const prompts = datasetPrompts(input);
+    expect(prompts).toHaveLength(12);
+    expect(prompts.map(p => p.listIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0]);
+    expect(prompts[0].caption).toMatch(/throat|windpipe|choke|sleeper|headlock/i);
+    expect(prompts[0].caption).not.toMatch(/lili doe|dolphin shorts/i);
+    expect((prompts[0].tags as Record<string, string>).mode).toBe("nyx-choke");
+    expect(prompts[11].caption).toContain("alternate choke pass");
+    expect(resolveDatasetNegativePrompt("nyx-choke")).toBe(DEFAULT_NYX_DOMINATION_NEGATIVE);
+    expect(resolveDatasetNegativePrompt("nyx-choke")).not.toMatch(/\bmale\b/i);
+  });
+
+  it("Nyx domination is its own list, wraps, allows male sub, stays separate from latex fetish", () => {
+    const projectRoot = path.resolve(process.cwd(), "..");
+    const list = loadPromptList(projectRoot, "nyx-domination");
+    expect(list.id).toBe("nyx-domination");
+    expect(list.prompts.length).toBeGreaterThanOrEqual(9);
+    expect(list.prompts[0]).toMatch(/Dominating|standing over a young man|kneels on the floor/i);
+    expect(list.prompts[0]).toMatch(/skinny, weak build/i);
+    expect(list.prompts.some(p => /lili doe|dolphin shorts/i.test(p))).toBe(false);
+    // Solo latex fetish file is a different collection
+    const latex = loadPromptList(projectRoot, "nyx-latex-fetish");
+    expect(latex.prompts[0]).not.toBe(list.prompts[0]);
+
+    const input = datasetSchema.parse({
+      name: "Nyx Dom",
+      trigger: "nyx",
+      model: "krea2.safetensors",
+      basePrompt: "photorealistic adult woman Nyx latex",
+      count: 12,
+      width: 512,
+      height: 768,
+      seed: 7,
+      datasetMode: "nyx-domination",
+      promptOrder: "sequential",
+      promptListId: "instagram-ugc", // must coerce away from IG
+      projectRoot
+    });
+    const prompts = datasetPrompts(input);
+    expect(prompts).toHaveLength(12);
+    expect(prompts[0].listIndex).toBe(0);
+    expect(prompts[0].caption).toMatch(/young man/i);
+    expect(prompts[0].caption).toMatch(/Nyx|latex/i);
+    expect(prompts[0].caption).not.toMatch(/lili doe|dolphin shorts/i);
+    expect((prompts[0].tags as Record<string, string>).mode).toBe("nyx-domination");
+    const n = list.prompts.length;
+    expect(prompts[n]?.listIndex).toBe(0);
+    expect(prompts[n]?.caption).toContain("alternate domination pass");
+
+    // Domination negative must NOT ban male; solo latex still does
+    expect(DEFAULT_NYX_DOMINATION_NEGATIVE).not.toMatch(/\bmale\b/i);
+    expect(DEFAULT_NYX_LATEX_FETISH_NEGATIVE).toMatch(/\bmale\b/i);
+    expect(resolveDatasetNegativePrompt("nyx-domination")).toBe(DEFAULT_NYX_DOMINATION_NEGATIVE);
+    expect(resolveDatasetNegativePrompt("nyx-latex-fetish")).toBe(DEFAULT_NYX_LATEX_FETISH_NEGATIVE);
+    expect(resolveDatasetNegativePrompt("instagram-ugc")).toBe(DEFAULT_INSTAGRAM_UGC_NEGATIVE);
   });
 
 

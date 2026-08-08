@@ -7,7 +7,7 @@ type DatasetJob = {
   id: string; name: string; trigger: string; model: string; status: string; progress: number;
   phase?: string; count: number; images: string[]; warning?: string; error?: string;
   characterAdjustments?: CharacterAdjustments;
-  datasetMode?: "standard" | "instagram-ugc" | "nyx-latex-fetish";
+  datasetMode?: string;
   seed?: number;
   masterIdentityStrength?: number;
   loras?: Array<{ name: string; strength: number }>;
@@ -15,64 +15,122 @@ type DatasetJob = {
   stackMatchedFromMaster?: boolean;
   stackNote?: string;
 };
-/** First-class modes — Instagram and Nyx are separate collections, not sub-lists of each other. */
-type DatasetMode = "standard" | "instagram-ugc" | "nyx-latex-fetish";
+/**
+ * Modes come from GET /api/datasets/modes (server catalog).
+ * Runtime accepts any list-id string; catalog only drives UI + defaults.
+ */
+type DatasetMode = string;
 type PromptOrder = "sequential" | "shuffle";
 type PromptListDoc = { id: string; name: string; version: number; description?: string; prompts: string[]; updatedAt?: string };
+type ModeCatalogEntry = {
+  id: string;
+  label: string;
+  optionLabel: string;
+  intro: string;
+  placeholderName: string;
+  characterPlaceholder: string;
+  defaultBasePrompt?: string;
+  negativeProfile: "standard" | "instagram-ugc" | "nsfw-solo" | "nsfw-with-male";
+  cycleFamily: string;
+  guidance: string[];
+  isPromptList: boolean;
+  nsfw?: boolean;
+};
 /** Dataset canvas presets. Default remains 512×768; hi-res is opt-in. */
 const DATASET_SIZE_PRESETS = [
   { id: "default", label: "512 × 768 · default (fast LoRA)", width: 512, height: 768 },
   { id: "portrait-3-4", label: "1530 × 2048 · Portrait 3:4 (hi-res)", width: 1530, height: 2048 }
 ] as const;
-const NYX_LIST_ID = "nyx-latex-fetish";
 const IG_LIST_ID = "instagram-ugc";
-function isListDatasetMode(mode: DatasetMode) {
-  return mode === "instagram-ugc" || mode === "nyx-latex-fetish";
-}
-function promptListIdForMode(mode: DatasetMode) {
-  return mode === "nyx-latex-fetish" ? NYX_LIST_ID : IG_LIST_ID;
-}
 
-/** Mirrors server DEFAULT_*_DATASET_NEGATIVE — keep in sync with server/src/dataset.ts */
-const DEFAULT_STANDARD_NEGATIVE =
-  "different person, changed identity, duplicate person, repeated generic pose, static pose, same camera framing, distorted face, malformed hands";
-const DEFAULT_INSTAGRAM_UGC_NEGATIVE = [
-  "different person, changed identity, male, group photo, crowd",
-  "deformed face, malformed hands, extra limbs, fused fingers, blurry face",
-  "heavy beauty filter, watermark, text overlay, logo, low resolution",
-  "nude, naked, fully nude, topless, bottomless, unclothed, no clothes, removed clothes",
-  "exposed breasts, nipples, areola, genitals, pubic hair",
-  "see-through, transparent clothing, sheer fabric, lingerie only, underwear only",
-  "bikini only, wardrobe malfunction, clothing pulled down, missing clothes"
-].join(", ");
-/** Nyx NSFW / X default — identity + quality only; nudity not banned. */
-const DEFAULT_NYX_LATEX_FETISH_NEGATIVE = [
-  "different person, changed identity, male, group photo, crowd",
-  "deformed face, malformed hands, extra limbs, fused fingers, blurry face",
-  "watermark, text overlay, logo, low resolution, cartoon, anime, 3d render"
-].join(", ");
-function defaultNegativeForMode(mode: DatasetMode) {
-  if (mode === "nyx-latex-fetish") return DEFAULT_NYX_LATEX_FETISH_NEGATIVE;
-  if (mode === "instagram-ugc") return DEFAULT_INSTAGRAM_UGC_NEGATIVE;
-  return DEFAULT_STANDARD_NEGATIVE;
+/** Fallback catalog if API is down (matches server dataset-mode-catalog.ts). */
+const FALLBACK_MODE_CATALOG: ModeCatalogEntry[] = [
+  {
+    id: "standard", label: "Standard", optionLabel: "Standard directed variety",
+    intro: "Creates labelled headshots, medium shots, full-body views, and varied poses while keeping the master character as the identity guide.",
+    placeholderName: "My character dataset", characterPlaceholder: "Stable identity only — face, hair, body.",
+    negativeProfile: "standard", cycleFamily: "standard",
+    guidance: ["40 distinct pose and action slots", "Ordered close-up, medium, seated, and full-body coverage"],
+    isPromptList: false
+  },
+  {
+    id: "instagram-ugc", label: "Instagram UGC", optionLabel: "Instagram UGC LoRA training",
+    intro: "Instagram UGC: own lifestyle shot collection for clothed character LoRA training.",
+    placeholderName: "Instagram UGC dataset", characterPlaceholder: "Stable identity only — face, hair, body.",
+    defaultBasePrompt: "photorealistic adult woman, consistent face and hair, natural skin, Instagram lifestyle aesthetic",
+    negativeProfile: "instagram-ugc", cycleFamily: "instagram",
+    guidance: ["Own lifestyle shot collection", "Clothing-aware default negative"],
+    isPromptList: true
+  },
+  {
+    id: "nyx-latex-fetish", label: "Nyx latex fetish", optionLabel: "Nyx latex fetish (NSFW / X)",
+    intro: "Nyx latex fetish (NSFW): own solo latex-hood shot list.",
+    placeholderName: "Nyx latex NSFW dataset", characterPlaceholder: "Stable Nyx identity — body, latex look anchors.",
+    defaultBasePrompt: "photorealistic adult woman Nyx, consistent curvy hourglass figure, black latex aesthetic, large soft red lips",
+    negativeProfile: "nsfw-solo", cycleFamily: "latex", guidance: ["Solo latex collection"], isPromptList: true, nsfw: true
+  },
+  {
+    id: "nyx-domination", label: "Nyx domination", optionLabel: "Nyx domination (NSFW / X)",
+    intro: "Nyx domination (NSFW): femdom with male sub.",
+    placeholderName: "Nyx domination NSFW dataset", characterPlaceholder: "Stable Nyx identity. Shot list supplies male sub + poses.",
+    defaultBasePrompt: "photorealistic adult woman Nyx, voluptuous hourglass figure, glossy black latex, featureless latex hood, large crimson lips, long black ponytail, long red nails",
+    negativeProfile: "nsfw-with-male", cycleFamily: "domination", guidance: ["Femdom collection; male allowed"], isPromptList: true, nsfw: true
+  },
+  {
+    id: "nyx-choke", label: "Nyx choke", optionLabel: "Nyx choke (NSFW / X)",
+    intro: "Nyx choke (NSFW): choke / sleeper / headlock femdom collection.",
+    placeholderName: "Nyx choke NSFW dataset", characterPlaceholder: "Stable Nyx identity. Shot list supplies choke holds + male sub.",
+    defaultBasePrompt: "photorealistic adult woman Nyx, voluptuous hourglass figure, glossy black latex bodysuit or catsuit, featureless latex hood, large crimson lips, long black ponytail, long red nails",
+    negativeProfile: "nsfw-with-male", cycleFamily: "choke", guidance: ["Choke collection; male allowed"], isPromptList: true, nsfw: true
+  }
+];
+
+/** Mirrors server DEFAULT_*_DATASET_NEGATIVE profiles. */
+const NEGATIVE_BY_PROFILE: Record<ModeCatalogEntry["negativeProfile"], string> = {
+  standard:
+    "different person, changed identity, duplicate person, repeated generic pose, static pose, same camera framing, distorted face, malformed hands",
+  "instagram-ugc": [
+    "different person, changed identity, male, group photo, crowd",
+    "deformed face, malformed hands, extra limbs, fused fingers, blurry face",
+    "heavy beauty filter, watermark, text overlay, logo, low resolution",
+    "nude, naked, fully nude, topless, bottomless, unclothed, no clothes, removed clothes",
+    "exposed breasts, nipples, areola, genitals, pubic hair",
+    "see-through, transparent clothing, sheer fabric, lingerie only, underwear only",
+    "bikini only, wardrobe malfunction, clothing pulled down, missing clothes"
+  ].join(", "),
+  "nsfw-solo": [
+    "different person, changed identity, male, group photo, crowd",
+    "deformed face, malformed hands, extra limbs, fused fingers, blurry face",
+    "watermark, text overlay, logo, low resolution, cartoon, anime, 3d render"
+  ].join(", "),
+  "nsfw-with-male": [
+    "different person, changed identity, group photo, crowd, extra people",
+    "deformed face, malformed hands, extra limbs, fused fingers, blurry face",
+    "watermark, text overlay, logo, low resolution, cartoon, anime, 3d render"
+  ].join(", ")
+};
+
+function modeEntryFrom(catalog: ModeCatalogEntry[], mode: string): ModeCatalogEntry {
+  return catalog.find(item => item.id === mode) || catalog.find(item => item.id === "standard") || FALLBACK_MODE_CATALOG[0];
+}
+function isListDatasetMode(entry: ModeCatalogEntry | string) {
+  if (typeof entry === "string") return entry !== "standard" && Boolean(entry);
+  return entry.isPromptList;
+}
+function promptListIdForMode(mode: string) {
+  return mode === "standard" ? IG_LIST_ID : mode;
+}
+function defaultNegativeForMode(catalog: ModeCatalogEntry[], mode: string) {
+  return NEGATIVE_BY_PROFILE[modeEntryFrom(catalog, mode).negativeProfile];
 }
 function isKnownDatasetNegative(value: string) {
   const v = value.trim();
-  return !v
-    || v === DEFAULT_STANDARD_NEGATIVE
-    || v === DEFAULT_INSTAGRAM_UGC_NEGATIVE
-    || v === DEFAULT_NYX_LATEX_FETISH_NEGATIVE;
+  return !v || Object.values(NEGATIVE_BY_PROFILE).includes(v);
 }
-/** Mirrors server datasetIdentityReferenceStrength defaults. */
-function defaultMasterIdentityStrength(mode: DatasetMode, architecture?: string) {
+function defaultMasterIdentityStrength(mode: string, architecture?: string) {
   const arch = architecture || "krea2";
   if (isListDatasetMode(mode)) return arch === "krea2" ? 0.72 : 0.55;
   return arch === "krea2" ? 0.85 : 0.65;
-}
-function modeLabel(mode?: string) {
-  if (mode === "nyx-latex-fetish") return "Nyx latex fetish";
-  if (mode === "instagram-ugc") return "Instagram UGC";
-  return "Standard";
 }
 type MasterStackInfo = {
   model?: string;
@@ -125,9 +183,11 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
   const [characterProfileId, setCharacterProfileId] = useState("");
   const [captionStrategy, setCaptionStrategy] = useState("flexible-character");
   const [datasetMode, setDatasetMode] = useState<DatasetMode>("standard");
+  const [modeCatalog, setModeCatalog] = useState<ModeCatalogEntry[]>(FALLBACK_MODE_CATALOG);
   const [promptOrder, setPromptOrder] = useState<PromptOrder>("sequential");
-  /** Bound to the active list mode (Instagram → instagram-ugc.json, Nyx → nyx-latex-fetish.json). */
+  /** Bound to the active list mode (mode id === JSON file id). */
   const [promptListId, setPromptListId] = useState(IG_LIST_ID);
+  const activeMode = modeEntryFrom(modeCatalog, datasetMode);
   /** Output canvas — default 512×768; optional 1530×2048. */
   const [outputWidth, setOutputWidth] = useState(512);
   const [outputHeight, setOutputHeight] = useState(768);
@@ -148,7 +208,7 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
   const [varyBackgrounds, setVaryBackgrounds] = useState(true);
   const [characterAdjustments, setCharacterAdjustments] = useState<CharacterAdjustments>({ hair: "", body: "", other: "" });
   /** Editable negative for every dataset shot (defaults change with mode). */
-  const [negativePrompt, setNegativePrompt] = useState(DEFAULT_STANDARD_NEGATIVE);
+  const [negativePrompt, setNegativePrompt] = useState(NEGATIVE_BY_PROFILE.standard);
   /**
    * Master Direct / identity reference strength (Krea ref_boost, Z-Image structural, Illustrious CN).
    * Higher = closer to master look; lower = freer pose/outfit from the shot list.
@@ -190,6 +250,12 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
   useEffect(() => {
     refresh().catch(error => setNotice(error.message));
     fetch("/api/characters").then(response => response.json()).then(setProfiles).catch(() => {});
+    fetch("/api/datasets/modes")
+      .then(response => (response.ok ? response.json() : Promise.reject()))
+      .then((list: ModeCatalogEntry[]) => {
+        if (Array.isArray(list) && list.length) setModeCatalog(list);
+      })
+      .catch(() => { /* keep FALLBACK_MODE_CATALOG */ });
     const timer = window.setInterval(() => refresh().catch(() => {}), 4000);
     return () => window.clearInterval(timer);
   }, []);
@@ -240,6 +306,12 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
     setPromptListId(id);
     void loadPromptList(id);
   }, [datasetMode]);
+  // Keep negative aligned when catalog loads/upgrades after first paint.
+  useEffect(() => {
+    setNegativePrompt((current: string) =>
+      isKnownDatasetNegative(current) ? defaultNegativeForMode(modeCatalog, datasetMode) : current
+    );
+  }, [modeCatalog]);
 
   async function refreshDatasetLoras(modelName = model) {
     try {
@@ -370,7 +442,7 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
       promptListId: isListDatasetMode(datasetMode) ? promptListIdForMode(datasetMode) : IG_LIST_ID,
       // Authoritative stack: server must not re-inject master LoRAs the user removed.
       loras: datasetLoras,
-      negativePrompt: negativePrompt.trim() || defaultNegativeForMode(datasetMode),
+      negativePrompt: negativePrompt.trim() || defaultNegativeForMode(modeCatalog, datasetMode),
       masterIdentityStrength: Math.min(2, Math.max(0, Number(masterIdentityStrength) || 0)),
       promptMatrix: { ...matrix, varyOutfits, varyBackgrounds }
     }));
@@ -440,50 +512,36 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
     <aside className="dataset-builder-panel">
       <div className="eyebrow">CHARACTER DATASET</div>
       <h1>Turn one character into a training set</h1>
-      <p className="intro">{
-        datasetMode === "nyx-latex-fetish"
-          ? "Nyx latex fetish (NSFW): its own 10-prompt collection for X-style adult latex content. Builds of 12/24/40 wrap the list from the start. Master image stays the identity guide."
-          : datasetMode === "instagram-ugc"
-            ? "Instagram UGC: its own lifestyle shot collection for clothed character LoRA training. Master image stays the identity guide."
-            : "Creates labelled headshots, medium shots, full-body views, and varied poses while keeping the master character as the identity guide."
-      }</p>
+      <p className="intro">{activeMode.intro}</p>
       {notice && <p className="training-notice">{notice}</p>}
       <label>Dataset mode<select value={datasetMode} onChange={event => {
         const mode = event.target.value as DatasetMode;
+        const entry = modeEntryFrom(modeCatalog, mode);
         setDatasetMode(mode);
-        setNegativePrompt(current =>
-          isKnownDatasetNegative(current) ? defaultNegativeForMode(mode) : current
+        setNegativePrompt((current: string) =>
+          isKnownDatasetNegative(current) ? defaultNegativeForMode(modeCatalog, mode) : current
         );
-        if (isListDatasetMode(mode)) {
+        if (entry.isPromptList) {
           setCount(40);
           setCaptionStrategy("flexible-character");
-          const nextListId = promptListIdForMode(mode);
-          setPromptListId(nextListId);
-          if (mode === "nyx-latex-fetish") {
-            setBasePrompt(current =>
-              /nyx|latex/i.test(current)
-                ? current
-                : "photorealistic adult woman Nyx, consistent curvy hourglass figure, black latex aesthetic, large soft red lips"
-            );
-          } else {
-            setBasePrompt(current =>
-              /instagram|lifestyle/i.test(current)
-                ? current
-                : "photorealistic adult woman, consistent face and hair, natural skin, Instagram lifestyle aesthetic"
-            );
+          setPromptListId(promptListIdForMode(mode));
+          if (entry.defaultBasePrompt) {
+            const next = entry.defaultBasePrompt;
+            setBasePrompt(current => {
+              // Keep custom text; only replace empty or previously known catalog defaults.
+              const knownDefaults = modeCatalog.map(item => item.defaultBasePrompt).filter(Boolean) as string[];
+              if (!current.trim() || knownDefaults.includes(current)) return next;
+              return current;
+            });
           }
         }
       }}>
-        <option value="standard">Standard directed variety</option>
-        <option value="instagram-ugc">Instagram UGC LoRA training</option>
-        <option value="nyx-latex-fetish">Nyx latex fetish (NSFW / X)</option>
+        {modeCatalog.map(entry => (
+          <option key={entry.id} value={entry.id}>{entry.optionLabel}</option>
+        ))}
       </select></label>
       <label>Saved character<select value={characterProfileId} onChange={event => selectProfile(event.target.value)}><option value="">No saved character</option>{profiles.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
-      <label>Dataset name<input value={name} onChange={event => setName(event.target.value)} placeholder={
-        datasetMode === "nyx-latex-fetish" ? "Nyx latex NSFW dataset"
-          : datasetMode === "instagram-ugc" ? "Instagram UGC dataset"
-            : "My character dataset"
-      }/></label>
+      <label>Dataset name<input value={name} onChange={event => setName(event.target.value)} placeholder={activeMode.placeholderName}/></label>
       <label>Trigger phrase<input value={trigger} onChange={event => setTrigger(event.target.value)} placeholder="photo of zperson"/></label>
       <label>Image model<select value={model} onChange={event => { setModel(event.target.value); void refreshDatasetLoras(event.target.value); }}>
         <option value="">Choose a model</option>
@@ -561,35 +619,37 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
           {" "}Recommended: list modes {defaultMasterIdentityStrength("instagram-ugc", selectedArchitecture)}, Standard {defaultMasterIdentityStrength("standard", selectedArchitecture)}.
         </small>
       </label>
-      <label>Character description<textarea value={basePrompt} onChange={event => setBasePrompt(event.target.value)} placeholder={
-        datasetMode === "nyx-latex-fetish"
-          ? "Stable Nyx identity — body, latex look anchors. Poses/framing come from the Nyx shot list."
-          : "Stable identity only — face, hair, body. Outfits come from the shot list in list modes."
-      }/></label>
+      <label>Character description<textarea value={basePrompt} onChange={event => setBasePrompt(event.target.value)} placeholder={activeMode.characterPlaceholder}/></label>
       <label className="dataset-negative-field">Negative prompt
         <textarea
           value={negativePrompt}
           onChange={event => setNegativePrompt(event.target.value)}
           rows={4}
-          placeholder={datasetMode === "nyx-latex-fetish"
-            ? "Identity/quality only — nudity is allowed for X NSFW"
-            : "Terms to push away (identity, hands, clothing coverage…)"}
+          placeholder={
+            activeMode.negativeProfile === "nsfw-with-male"
+              ? "Do not ban male — partner/sub is in the shots. Identity/quality only."
+              : activeMode.negativeProfile === "nsfw-solo"
+                ? "Identity/quality only — nudity is allowed for X NSFW"
+                : "Terms to push away (identity, hands, clothing coverage…)"
+          }
         />
         <div className="dataset-negative-actions">
           <button
             type="button"
             className="ghost"
-            onClick={() => setNegativePrompt(defaultNegativeForMode(datasetMode))}
+            onClick={() => setNegativePrompt(defaultNegativeForMode(modeCatalog, datasetMode))}
             title="Restore mode default negative"
           >
             Reset to default
           </button>
           <small className="dataset-seed-hint">
-            {datasetMode === "nyx-latex-fetish"
-              ? "Nyx NSFW default: identity/quality only. Nudity is not blocked (X-friendly)."
-              : datasetMode === "instagram-ugc"
-              ? "Instagram default includes clothing-coverage / anti-nude terms. Edit freely."
-              : "Standard default focuses on identity and pose variety."}
+            {activeMode.negativeProfile === "nsfw-with-male"
+              ? "NSFW default allows male partner/sub. Nudity not blocked."
+              : activeMode.negativeProfile === "nsfw-solo"
+                ? "Solo NSFW default: identity/quality only. Nudity not blocked (X-friendly)."
+                : activeMode.negativeProfile === "instagram-ugc"
+                  ? "Instagram default includes clothing-coverage / anti-nude terms. Edit freely."
+                  : "Standard default focuses on identity and pose variety."}
           </small>
         </div>
       </label>
@@ -641,16 +701,15 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
         </small>
       </label>
       <label>Caption strategy<select value={captionStrategy} onChange={event => setCaptionStrategy(event.target.value)}><option value="identity-focused">Identity-focused</option><option value="flexible-character">Flexible character</option><option value="outfit-concept">Outfit / concept</option><option value="style">Style</option><option value="custom">Custom</option></select></label>
-      {isListDatasetMode(datasetMode) ? (
+      {activeMode.isPromptList ? (
         <details className="prompt-matrix" open>
           <summary>
-            <span>{datasetMode === "nyx-latex-fetish" ? "Nyx latex fetish prompts" : "Instagram UGC prompts"}</span>
+            <span>{activeMode.label} prompts</span>
             <em>{promptList?.prompts?.length || "…"} prompts · {promptOrder} · wraps</em>
           </summary>
           <p className="prompt-matrix-note">
-            {datasetMode === "nyx-latex-fetish"
-              ? "Standalone NSFW set (not Instagram). Each caption = (1) one of these Nyx shots, then (2) Character description. 10 prompts wrap for larger counts. File: data/dataset-prompt-lists/nyx-latex-fetish.json"
-              : "Standalone Instagram lifestyle set. Each caption = (1) one list shot, then (2) Character description. File: data/dataset-prompt-lists/instagram-ugc.json"}
+            Standalone set (not mixed with other modes). Each caption = (1) list shot, then (2) Character description.
+            File: <code>data/dataset-prompt-lists/{promptListIdForMode(datasetMode)}.json</code>.
             {" "}Order: {promptOrder === "sequential" ? "1→N then restart" : "shuffle each full cycle, then wrap"}.
           </p>
           <label>Prompt order
@@ -707,32 +766,16 @@ export function DatasetBuilder({ models, onTrain, onExit, presetHandoff }: {
       <div className="training-heading"><div><span>MASTER CHARACTER</span><h2>Identity reference</h2></div><button onClick={() => input.current?.click()}><FolderOpen/>Choose image</button></div>
       <input ref={input} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={event => choose(event.target.files?.[0])}/>
       {preview ? <img className="dataset-master-image" src={preview} alt="Master character"/> : <div className="training-drop"><Sparkles/><h3>Choose your clearest character image</h3><p>Use a sharp, unobstructed face with neutral lighting. A waist-up or full-body source gives the generator more identity and clothing information.</p></div>}
-      <div className="dataset-guidance">{
-        datasetMode === "nyx-latex-fetish" ? <>
-          <strong>Nyx latex fetish (NSFW) plan</strong>
-          <span>Own 10-prompt collection — not Instagram</span>
-          <span>Lips close-ups · smother · rear · standing · kneeling</span>
-          <span>Glossy black latex hood + bodysuit, red lips</span>
-          <span>Counts 12/24/40 wrap the list; extensions continue</span>
-          <span>Default negative allows adult / X-style content</span>
-        </> : datasetMode === "instagram-ugc" ? <>
-          <strong>Instagram UGC LoRA plan</strong>
-          <span>Own lifestyle shot collection (separate from Nyx)</span>
-          <span>Clothing-aware default negative</span>
-          <span>Extensions continue the list instead of restarting</span>
-        </> : <>
-          <strong>Directed variety plan</strong>
-          <span>40 distinct pose and action slots</span>
-          <span>Ordered close-up, medium, seated, and full-body coverage</span>
-          <span>Extensions continue from the next unused slot instead of restarting</span>
-        </>
-      }</div>
+      <div className="dataset-guidance">
+        <strong>{activeMode.label}{activeMode.nsfw ? " (NSFW)" : ""} plan</strong>
+        {activeMode.guidance.map(line => <span key={line}>{line}</span>)}
+      </div>
     </section>}
     <aside className="training-history">
       {reviewJob ? <div className="review-checklist"><div className="section-title"><span><Check/> Before training</span></div><ol><li><strong>Review every image</strong><span>Keep strong identity matches. Remove drift, anatomy problems, and duplicates from training.</span></li><li><strong>Check captions</strong><span>Caption edits save automatically and follow each kept image into LoRA Lab.</span></li><li><strong>Add anything missing</strong><span>New local images enter as Unsure so they cannot train until you approve them.</span></li><li><strong>Continue with kept images</strong><span>At least 3 are required; 12–30 varied, high-quality images are recommended.</span></li></ol></div> : <><div className="section-title history-title"><span><Images/> Dataset history</span><button onClick={() => refresh().then(() => setNotice("Dataset history refreshed.")).catch(error => setNotice(error.message))} aria-label="Refresh dataset history"><RefreshCw/>Refresh</button></div>
       {jobs.map(job => <article key={job.id}>
         <div className="training-job-head"><strong>{job.name}</strong><span className={`training-state ${job.status}`}>{job.status}</span></div>
-        <small>{job.datasetMode && job.datasetMode !== "standard" ? `${modeLabel(job.datasetMode)} · ` : ""}{job.status === "completed" ? `${job.images?.length || 0} images` : `${job.images?.length || 0}/${job.count} images`}{typeof job.seed === "number" ? ` · seed ${job.seed}` : ""}{typeof job.masterIdentityStrength === "number" ? ` · master ${job.masterIdentityStrength}` : ""} · {job.phase}</small>
+        <small>{job.datasetMode && job.datasetMode !== "standard" ? `${modeEntryFrom(modeCatalog, job.datasetMode).label} · ` : ""}{job.status === "completed" ? `${job.images?.length || 0} images` : `${job.images?.length || 0}/${job.count} images`}{typeof job.seed === "number" ? ` · seed ${job.seed}` : ""}{typeof job.masterIdentityStrength === "number" ? ` · master ${job.masterIdentityStrength}` : ""} · {job.phase}</small>
         {(job.model || job.loras?.length || job.appliedLoras?.length) && (
           <small className="dataset-stack-line" title={(job.appliedLoras || job.loras || []).map(l => `${l.name}:${l.strength}`).join("\n") || job.stackNote || ""}>
             {(job.model || "").replace(/\.safetensors$/i, "") || "model?"}

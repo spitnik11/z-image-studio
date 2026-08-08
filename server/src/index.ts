@@ -47,6 +47,7 @@ import {
   replacePromptListPrompts,
   savePromptList
 } from "./dataset-prompt-lists.js";
+import { getDatasetModeEntry, listKnownDatasetModes } from "./dataset-mode-catalog.js";
 import { analyzeReview, exportReviewedDataset, loadReview, removeReviewItem, saveReview, updateReviewItem } from "./dataset-review.js";
 import { buildModelManifest, detectReferenceCapabilities, detectUpscaleCatalog } from "./diagnostics.js";
 import { adapterForModel, modelAdapters } from "./model-adapters.js";
@@ -671,7 +672,17 @@ app.get("/api/video/diagnostics", async (_q, r) => {
   } catch (e) { r.status(503).json({ ready: false, connected: false, error: simplify(e) }); }
 });
 app.get("/api/datasets", (_q, r) => r.json(datasetRecords));
-/** Prompt lists must register before /api/datasets/:id or "prompt-lists" is captured as an id. */
+/**
+ * Mode catalog + prompt lists must register before /api/datasets/:id
+ * or path segments like "modes" / "prompt-lists" are captured as ids.
+ */
+app.get("/api/datasets/modes", (_q, r) => {
+  try {
+    r.json(listKnownDatasetModes());
+  } catch (error) {
+    r.status(500).json({ error: simplify(error) });
+  }
+});
 app.get("/api/datasets/prompt-lists", (_q, r) => {
   try {
     r.json(listPromptLists(root));
@@ -1278,11 +1289,12 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
         unmatchedNote,
         mismatchedLoras.length ? `LoRA architecture mismatch (applied anyway): ${mismatchedLoras.join(", ")} — model resolved as ${requiredFamily}. Re-verify in LoRA Manager if results look off.` : "",
         architecture === "z-image" ? "Z-Image uses structural guidance; Krea 2 Identity mode gives stronger one-image identity retention." : "",
-        config.datasetMode === "instagram-ugc"
-          ? "Instagram UGC mode: own lifestyle list + character captions; clothing-aware negative (editable)."
-          : config.datasetMode === "nyx-latex-fetish"
-            ? "Nyx latex fetish mode: own NSFW 10-prompt set (wraps); adult-friendly negative (nudity not blocked). X-style content OK."
-            : ""
+        (() => {
+          const mode = String(config.datasetMode || "standard");
+          if (mode === "standard") return "";
+          const entry = getDatasetModeEntry(mode);
+          return `${entry.label} mode: list + character captions; wraps any list length.${entry.nsfw ? " NSFW / X-style defaults." : ""}`;
+        })()
       ].filter(Boolean).join(" "),
       ...configWithStack,
       negativePrompt: datasetNegative,
@@ -2283,11 +2295,12 @@ function monitorDataset(record: any) {
         reconnectAttempts = 0;
         record.status = "active";
         record.error = undefined;
-        record.phase = record.datasetMode === "nyx-latex-fetish"
-          ? "Generating Nyx latex fetish views"
-          : record.datasetMode === "instagram-ugc"
-            ? "Generating Instagram UGC views"
-            : "Generating consistent character views";
+        {
+          const mode = String(record.datasetMode || "standard");
+          record.phase = mode === "standard"
+            ? "Generating consistent character views"
+            : `Generating ${getDatasetModeEntry(mode).label} views`;
+        }
       }
       const terminalCount = record.completedPromptIds.length + record.failedPromptIds.length;
       record.progress = Math.round((terminalCount / record.promptIds.length) * 100);

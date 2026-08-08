@@ -6,6 +6,10 @@ import {
   loadPromptListSafe,
   promptIndexForSlot
 } from "./dataset-prompt-lists.js";
+import {
+  cycleNotesForFamily,
+  getDatasetModeEntry
+} from "./dataset-mode-catalog.js";
 
 const projectRootFromHere = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -13,22 +17,35 @@ const projectRootFromHere = path.resolve(path.dirname(fileURLToPath(import.meta.
  * Dataset modes:
  * - "standard" = directed pose matrix
  * - any other id = prompt-list mode using data/dataset-prompt-lists/<id>.json
- *   (instagram-ugc, nyx-latex-fetish, future custom sets)
  *
- * Keep as open string (not a closed zod enum) so new JSON lists work without a schema redeploy.
- * UI still offers first-class options for known sets.
+ * Open string (not closed zod enum) so new JSON lists work without a schema redeploy.
+ * Known UI/copy/negatives live in dataset-mode-catalog.ts (add one entry per new set).
  */
 export const DATASET_MODE_STANDARD = "standard" as const;
 export const DATASET_MODE_INSTAGRAM_UGC = "instagram-ugc" as const;
 export const DATASET_MODE_NYX_LATEX_FETISH = "nyx-latex-fetish" as const;
+export const DATASET_MODE_NYX_DOMINATION = "nyx-domination" as const;
+export const DATASET_MODE_NYX_CHOKE = "nyx-choke" as const;
 export const NYX_PROMPT_LIST_ID = "nyx-latex-fetish";
+export const NYX_DOMINATION_LIST_ID = "nyx-domination";
+export const NYX_CHOKE_LIST_ID = "nyx-choke";
 
 /** Known first-class modes (docs/UI). Runtime accepts any list-id-shaped mode string. */
 export type DatasetModeId =
   | typeof DATASET_MODE_STANDARD
   | typeof DATASET_MODE_INSTAGRAM_UGC
   | typeof DATASET_MODE_NYX_LATEX_FETISH
+  | typeof DATASET_MODE_NYX_DOMINATION
+  | typeof DATASET_MODE_NYX_CHOKE
   | (string & {});
+
+/** NSFW list modes (X-friendly negatives; not Instagram clothing-coverage). */
+export function isNsfwDatasetMode(mode?: string | null): boolean {
+  const entry = getDatasetModeEntry(mode);
+  if (entry.nsfw) return true;
+  const m = String(mode || "").trim();
+  return m.startsWith("nyx-");
+}
 
 const datasetModeIdSchema = z
   .string()
@@ -302,11 +319,22 @@ export const DEFAULT_INSTAGRAM_UGC_NEGATIVE = [
 ].join(", ");
 
 /**
- * Nyx latex fetish / X NSFW negative: identity + quality only.
+ * Nyx latex fetish / solo X NSFW negative: identity + quality only.
  * Intentionally does NOT ban nudity, latex, or intimate framing (X / adult content OK).
+ * Keeps "male" out for solo-woman character sets.
  */
 export const DEFAULT_NYX_LATEX_FETISH_NEGATIVE = [
   "different person, changed identity, male, group photo, crowd",
+  "deformed face, malformed hands, extra limbs, fused fingers, blurry face",
+  "watermark, text overlay, logo, low resolution, cartoon, anime, 3d render"
+].join(", ");
+
+/**
+ * Nyx domination / femdom set: NSFW OK and the male sub must remain in-frame.
+ * Do NOT include "male" here — that would fight the shot list.
+ */
+export const DEFAULT_NYX_DOMINATION_NEGATIVE = [
+  "different person, changed identity, group photo, crowd, extra people",
   "deformed face, malformed hands, extra limbs, fused fingers, blurry face",
   "watermark, text overlay, logo, low resolution, cartoon, anime, 3d render"
 ].join(", ");
@@ -318,8 +346,10 @@ export function resolveDatasetNegativePrompt(
 ): string {
   const trimmed = String(custom ?? "").trim();
   if (trimmed) return trimmed.slice(0, 2500);
-  if (datasetMode === DATASET_MODE_NYX_LATEX_FETISH) return DEFAULT_NYX_LATEX_FETISH_NEGATIVE;
-  if (datasetMode === DATASET_MODE_INSTAGRAM_UGC) return DEFAULT_INSTAGRAM_UGC_NEGATIVE;
+  const profile = getDatasetModeEntry(datasetMode).negativeProfile;
+  if (profile === "nsfw-with-male") return DEFAULT_NYX_DOMINATION_NEGATIVE;
+  if (profile === "nsfw-solo") return DEFAULT_NYX_LATEX_FETISH_NEGATIVE;
+  if (profile === "instagram-ugc") return DEFAULT_INSTAGRAM_UGC_NEGATIVE;
   return DEFAULT_STANDARD_DATASET_NEGATIVE;
 }
 
@@ -404,9 +434,11 @@ function listShotTags(
       ? "soft window side light"
       : "soft natural indoor light";
   const expression =
-    datasetMode === DATASET_MODE_NYX_LATEX_FETISH
-      ? "dominant teasing expression"
-      : "instagram lifestyle expression";
+    datasetMode === DATASET_MODE_NYX_DOMINATION
+      ? "commanding femdom expression"
+      : datasetMode === DATASET_MODE_NYX_LATEX_FETISH || String(datasetMode).startsWith("nyx-")
+        ? "dominant teasing expression"
+        : "instagram lifestyle expression";
   return {
     angle,
     framing,
@@ -538,18 +570,7 @@ function listBasedDatasetPrompts(input: DatasetInput) {
   const listLen = shots.length;
   const characterFeatures = composeCharacterFeatureBlock(input);
   const order = input.promptOrder || "sequential";
-  const cycleNotes =
-    mode === DATASET_MODE_NYX_LATEX_FETISH
-      ? [
-          "",
-          "alternate latex pass with mirrored body orientation and slightly different camera height",
-          "third latex pass with changed hand placement and gaze while keeping the same latex look"
-        ]
-      : [
-          "",
-          "alternate Instagram pass with mirrored body orientation and slightly different camera height",
-          "third Instagram pass with changed hand placement and gaze while keeping the same outfit concept"
-        ];
+  const cycleNotes = cycleNotesForFamily(getDatasetModeEntry(mode).cycleFamily);
 
   return Array.from({ length: input.count }, (_, index) => {
     const slot = input.variationOffset + index;
