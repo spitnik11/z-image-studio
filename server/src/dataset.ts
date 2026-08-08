@@ -9,26 +9,49 @@ import {
 
 const projectRootFromHere = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
-/** First-class dataset modes. List-based modes share wrap/cycle logic but keep separate lists + defaults. */
+/**
+ * Dataset modes:
+ * - "standard" = directed pose matrix
+ * - any other id = prompt-list mode using data/dataset-prompt-lists/<id>.json
+ *   (instagram-ugc, nyx-latex-fetish, future custom sets)
+ *
+ * Keep as open string (not a closed zod enum) so new JSON lists work without a schema redeploy.
+ * UI still offers first-class options for known sets.
+ */
 export const DATASET_MODE_STANDARD = "standard" as const;
 export const DATASET_MODE_INSTAGRAM_UGC = "instagram-ugc" as const;
 export const DATASET_MODE_NYX_LATEX_FETISH = "nyx-latex-fetish" as const;
 export const NYX_PROMPT_LIST_ID = "nyx-latex-fetish";
 
+/** Known first-class modes (docs/UI). Runtime accepts any list-id-shaped mode string. */
 export type DatasetModeId =
   | typeof DATASET_MODE_STANDARD
   | typeof DATASET_MODE_INSTAGRAM_UGC
-  | typeof DATASET_MODE_NYX_LATEX_FETISH;
+  | typeof DATASET_MODE_NYX_LATEX_FETISH
+  | (string & {});
+
+const datasetModeIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/i, "Invalid dataset mode id.")
+  .default(DATASET_MODE_STANDARD);
 
 /** Modes that pull shots from data/dataset-prompt-lists/*.json (any length, wraps). */
 export function isPromptListDatasetMode(mode?: string | null): boolean {
-  return mode === DATASET_MODE_INSTAGRAM_UGC || mode === DATASET_MODE_NYX_LATEX_FETISH;
+  const m = String(mode || "").trim();
+  return Boolean(m) && m !== DATASET_MODE_STANDARD;
 }
 
-/** Default JSON list id for a list-based mode (never cross-wire Instagram ↔ Nyx). */
+/**
+ * Default JSON list id for a list-based mode.
+ * Mode id IS the list id (instagram-ugc → instagram-ugc.json, nyx-latex-fetish → …).
+ * Never force Instagram when the mode is a different set.
+ */
 export function defaultPromptListIdForMode(mode?: string | null): string {
-  if (mode === DATASET_MODE_NYX_LATEX_FETISH) return NYX_PROMPT_LIST_ID;
-  return DEFAULT_PROMPT_LIST_ID; // instagram-ugc
+  if (!mode || mode === DATASET_MODE_STANDARD) return DEFAULT_PROMPT_LIST_ID;
+  return mode;
 }
 
 /**
@@ -42,17 +65,19 @@ export function resolveInstagramPrompts(
   if (options?.customPrompts?.length) {
     return options.customPrompts.map(item => item.trim()).filter(Boolean);
   }
-  // Mode wins: Nyx mode always uses the Nyx list unless a non-default custom id is intentional.
-  // Never fall back to Instagram when mode is Nyx (or vice versa via default).
-  let id = options?.promptListId || defaultPromptListIdForMode(options?.datasetMode);
-  if (options?.datasetMode === DATASET_MODE_NYX_LATEX_FETISH) {
-    id = options.promptListId && options.promptListId !== DEFAULT_PROMPT_LIST_ID
-      ? options.promptListId
-      : NYX_PROMPT_LIST_ID;
-  } else if (options?.datasetMode === DATASET_MODE_INSTAGRAM_UGC) {
-    id = options.promptListId && options.promptListId !== NYX_PROMPT_LIST_ID
-      ? options.promptListId
-      : DEFAULT_PROMPT_LIST_ID;
+  const mode = options?.datasetMode;
+  const defaultId = defaultPromptListIdForMode(mode);
+  // Prefer explicit promptListId when it matches the mode family; otherwise mode wins so
+  // Instagram/Nyx never cross-wire if the client sends a stale default list id.
+  let id = options?.promptListId || defaultId;
+  if (isPromptListDatasetMode(mode)) {
+    const explicit = String(options?.promptListId || "").trim();
+    // If client still sends the global default (instagram-ugc) while mode is another set, coerce.
+    if (!explicit || (explicit === DEFAULT_PROMPT_LIST_ID && mode !== DATASET_MODE_INSTAGRAM_UGC)) {
+      id = defaultId;
+    } else {
+      id = explicit;
+    }
   }
   const list = loadPromptListSafe(projectRoot, id);
   if (!list?.prompts?.length) {
@@ -210,14 +235,15 @@ export const datasetSchema = z.object({
   characterAdjustments: characterAdjustmentsSchema,
   captionStrategy: z.enum(["identity-focused", "flexible-character", "outfit-concept", "style", "custom"]).default("flexible-character"),
   /**
-   * standard = directed pose/angle matrix (default Dataset Builder).
-   * instagram-ugc = Instagram lifestyle shot list (its own JSON collection).
-   * nyx-latex-fetish = Nyx NSFW latex fetish shot list (separate collection; X-safe / no anti-nudity default).
+   * standard = directed pose/angle matrix.
+   * Any other id = prompt-list mode (loads data/dataset-prompt-lists/<id or promptListId>.json).
+   * Open string (not closed enum) so new custom sets work without schema redeploy.
+   * First-class UI options: instagram-ugc, nyx-latex-fetish.
    */
-  datasetMode: z.enum(["standard", "instagram-ugc", "nyx-latex-fetish"]).default("standard"),
+  datasetMode: datasetModeIdSchema,
   /**
    * Which JSON under data/dataset-prompt-lists/ for list modes.
-   * Instagram mode → instagram-ugc; Nyx mode → nyx-latex-fetish (server coerces if mismatched).
+   * Defaults from mode id; server coerces when mode is a set and client sent a stale default.
    */
   promptListId: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/i).default(DEFAULT_PROMPT_LIST_ID),
   /**

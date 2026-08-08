@@ -46,14 +46,21 @@ describe("dataset prompt lists", () => {
     const projectRoot = path.resolve(process.cwd(), "..");
     const list = loadPromptList(projectRoot, "nyx-latex-fetish");
     expect(list.id).toBe("nyx-latex-fetish");
+    expect(list.version).toBeGreaterThanOrEqual(2);
     expect(list.prompts.length).toBe(10);
-    expect(list.prompts[0]).toMatch(/Photorealistic extreme close-up of Nyx/i);
-    expect(list.prompts[0]).toMatch(/full black latex hood/i);
-    expect(list.prompts[0]).toMatch(/vividly red lips/i);
-    expect(list.prompts[1]).toMatch(/smothering pose/i);
-    expect(list.prompts[4]).toMatch(/sitting fully on the viewer's face|sitting fully on the viewer/i);
-    expect(list.prompts[8]).toMatch(/slight hip tilt/i);
-    expect(list.prompts[9]).toMatch(/smothering threat pose/i);
+    // v2 shot list (titles in docs; full text in JSON)
+    expect(list.prompts[0]).toMatch(/extreme macro photograph/i);
+    expect(list.prompts[0]).toMatch(/crimson-red lips|crimson.?red lips/i);
+    expect(list.prompts[0]).toMatch(/glossy black latex hood/i);
+    expect(list.prompts[1]).toMatch(/kneeling extremely close above the camera/i);
+    expect(list.prompts[2]).toMatch(/hands and knees|crawling/i);
+    expect(list.prompts[3]).toMatch(/extreme close portrait|saliva/i);
+    expect(list.prompts[4]).toMatch(/knees planted broadly apart|powerful kneeling/i);
+    expect(list.prompts[5]).toMatch(/crouched extremely low|balls of her feet/i);
+    expect(list.prompts[6]).toMatch(/extreme macro photograph of Nyx/i);
+    expect(list.prompts[7]).toMatch(/kneeling heavily into the mattress/i);
+    expect(list.prompts[8]).toMatch(/standing directly in front of the camera/i);
+    expect(list.prompts[9]).toMatch(/kneeling only inches from the camera/i);
     expect(list.prompts.every(p => p.trim().length >= 8)).toBe(true);
     // Must not share Instagram UGC content
     expect(list.prompts.some(p => /lili doe|dolphin shorts|streamer room/i.test(p))).toBe(false);
@@ -183,6 +190,19 @@ describe("dataset prompt lists", () => {
 
   it("Nyx first-class mode uses its own list, wraps, and keeps Instagram separate", () => {
     const projectRoot = path.resolve(process.cwd(), "..");
+    // Open schema: nyx is a valid mode string (not limited to standard|instagram-ugc)
+    expect(() => datasetSchema.parse({
+      name: "Nyx Mode",
+      trigger: "nyx",
+      model: "krea2.safetensors",
+      basePrompt: "identity",
+      count: 12,
+      width: 512,
+      height: 768,
+      seed: 1,
+      datasetMode: "nyx-latex-fetish",
+      projectRoot
+    })).not.toThrow();
     const base = datasetSchema.parse({
       name: "Nyx Wrap",
       trigger: "nyx",
@@ -205,7 +225,7 @@ describe("dataset prompt lists", () => {
     expect(twelve).toHaveLength(12);
     expect(twelve.map(p => p.listIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1]);
     expect(twelve[0].caption).toMatch(/Nyx/i);
-    expect(twelve[0].caption).toMatch(/red lips|latex/i);
+    expect(twelve[0].caption).toMatch(/red lips|latex|crimson/i);
     expect(twelve[0].caption).not.toMatch(/lili doe|dolphin shorts/i);
     expect((twelve[0].tags as Record<string, string>).mode).toBe("nyx-latex-fetish");
     expect(twelve[10].listIndex).toBe(0);
@@ -230,6 +250,24 @@ describe("dataset prompt lists", () => {
     expect(forty).toHaveLength(40);
     expect(forty.every(p => p.listIndex >= 0 && p.listIndex < 10)).toBe(true);
     expect(forty[39].listIndex).toBe(9);
+  });
+
+  it("accepts any list-shaped datasetMode string (future custom sets) without closed enum", () => {
+    const projectRoot = path.resolve(process.cwd(), "..");
+    // Back-compat: legacy two modes still parse
+    expect(datasetSchema.parse({
+      name: "Legacy Std", trigger: "tok", model: "m.safetensors", basePrompt: "id",
+      count: 12, width: 512, height: 768, seed: 1, datasetMode: "standard", projectRoot
+    }).datasetMode).toBe("standard");
+    expect(datasetSchema.parse({
+      name: "Legacy IG", trigger: "tok", model: "m.safetensors", basePrompt: "id",
+      count: 12, width: 512, height: 768, seed: 1, datasetMode: "instagram-ugc", projectRoot
+    }).datasetMode).toBe("instagram-ugc");
+    // Open: custom mode ids are not rejected by zod (list load may still fail if JSON missing)
+    expect(datasetSchema.parse({
+      name: "Custom Mode", trigger: "tok", model: "m.safetensors", basePrompt: "id",
+      count: 12, width: 512, height: 768, seed: 1, datasetMode: "my-custom-set", projectRoot
+    }).datasetMode).toBe("my-custom-set");
   });
 
 
