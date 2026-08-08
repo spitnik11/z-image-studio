@@ -871,7 +871,7 @@ app.post("/api/datasets/:id/extend", async (q, r) => {
     // Prefer strength stored on the original build; extension can override via body later if needed.
     const identityStrength = resolveMasterIdentityStrength(
       architecture,
-      record.datasetMode === "instagram-ugc" ? "instagram-ugc" : "standard",
+      record.datasetMode || "standard",
       record.masterIdentityStrength
     );
     try {
@@ -1278,7 +1278,11 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
         unmatchedNote,
         mismatchedLoras.length ? `LoRA architecture mismatch (applied anyway): ${mismatchedLoras.join(", ")} — model resolved as ${requiredFamily}. Re-verify in LoRA Manager if results look off.` : "",
         architecture === "z-image" ? "Z-Image uses structural guidance; Krea 2 Identity mode gives stronger one-image identity retention." : "",
-        config.datasetMode === "instagram-ugc" ? "Instagram UGC mode: list + character captions; clothing-aware negative (editable). Review outfits before LoRA Lab." : ""
+        config.datasetMode === "instagram-ugc"
+          ? "Instagram UGC mode: own lifestyle list + character captions; clothing-aware negative (editable)."
+          : config.datasetMode === "nyx-latex-fetish"
+            ? "Nyx latex fetish mode: own NSFW 10-prompt set (wraps); adult-friendly negative (nudity not blocked). X-style content OK."
+            : ""
       ].filter(Boolean).join(" "),
       ...configWithStack,
       negativePrompt: datasetNegative,
@@ -2279,9 +2283,11 @@ function monitorDataset(record: any) {
         reconnectAttempts = 0;
         record.status = "active";
         record.error = undefined;
-        record.phase = record.datasetMode === "instagram-ugc"
-          ? "Generating Instagram UGC views"
-          : "Generating consistent character views";
+        record.phase = record.datasetMode === "nyx-latex-fetish"
+          ? "Generating Nyx latex fetish views"
+          : record.datasetMode === "instagram-ugc"
+            ? "Generating Instagram UGC views"
+            : "Generating consistent character views";
       }
       const terminalCount = record.completedPromptIds.length + record.failedPromptIds.length;
       record.progress = Math.round((terminalCount / record.promptIds.length) * 100);

@@ -180,4 +180,29 @@ vault: UGC-WORKFLOW.md, STATUS.md, PROJECT-ZImageStudio.md, ENHANCE-FROM-IMAGE-P
 
 Copy the block in the user-facing message (section below in chat). Keep this file as the long form.
 
-**Last updated:** 2026-08-03 · Agent: Grok Build
+**Last updated:** 2026-08-07 · Agent: Grok Build
+
+## 13. Dataset Run seed (2026-08-03 evening)
+
+See vault `STATUS.md` / `UGC-WORKFLOW.md`: Run seed under Dataset size; never hardcode 42; rebuild `app/dist` for UI on :3199.
+
+## 14. Nyx latex fetish mode + dataset size (2026-08-07)
+
+### What shipped
+| Area | Detail |
+| --- | --- |
+| Mode | First-class `datasetMode: "nyx-latex-fetish"` (peer of Instagram UGC, **not** a sub-list) |
+| Prompts | `data/dataset-prompt-lists/nyx-latex-fetish.json` — 10 preserved NSFW latex shots |
+| Wrap | Any list length; `promptIndexForSlot` wraps for count 12/24/40 |
+| Negative | `DEFAULT_NYX_LATEX_FETISH_NEGATIVE` — identity/quality only; **no anti-nudity** (X-friendly) |
+| Size | Default still **512×768**; optional **1530×2048**; schema max **2048** (matches Photo) |
+
+### Backwards compatibility (do not break)
+1. **Modes** — `standard` and `instagram-ugc` unchanged. New mode is additive in the zod enum only.
+2. **Stored jobs** — Records with missing/`standard`/`instagram-ugc` mode keep prior behavior. Phase labels and negatives still resolve by mode; unknown/empty → standard defaults.
+3. **Instagram list** — Still `data/dataset-prompt-lists/instagram-ugc.json`. Nyx mode coerces list id so IG prompts never leak into Nyx builds (and vice versa via mode defaults).
+4. **promptListId** — Default remains `instagram-ugc`. List modes set the correct id from the UI; server coerces by mode when mismatched.
+5. **Size** — Default remains `512×768`. Only the **max** was raised (1024→2048) and `multipleOf(64)` was removed so Photo-class sizes like 1530×2048 work. Existing 512/768/1024 jobs still validate.
+6. **API** — Same create/extend/stop/review paths. No new required fields; new mode is optional on create.
+7. **Negatives** — Instagram clothing-aware default preserved. Nyx does **not** reuse that default.
+8. **Ops** — After server change: `npm run build -w server` **and restart** `node server/dist/index.js`. After UI: `npm run build -w app` + hard-refresh.

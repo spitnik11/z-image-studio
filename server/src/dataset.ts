@@ -9,22 +9,55 @@ import {
 
 const projectRootFromHere = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
+/** First-class dataset modes. List-based modes share wrap/cycle logic but keep separate lists + defaults. */
+export const DATASET_MODE_STANDARD = "standard" as const;
+export const DATASET_MODE_INSTAGRAM_UGC = "instagram-ugc" as const;
+export const DATASET_MODE_NYX_LATEX_FETISH = "nyx-latex-fetish" as const;
+export const NYX_PROMPT_LIST_ID = "nyx-latex-fetish";
+
+export type DatasetModeId =
+  | typeof DATASET_MODE_STANDARD
+  | typeof DATASET_MODE_INSTAGRAM_UGC
+  | typeof DATASET_MODE_NYX_LATEX_FETISH;
+
+/** Modes that pull shots from data/dataset-prompt-lists/*.json (any length, wraps). */
+export function isPromptListDatasetMode(mode?: string | null): boolean {
+  return mode === DATASET_MODE_INSTAGRAM_UGC || mode === DATASET_MODE_NYX_LATEX_FETISH;
+}
+
+/** Default JSON list id for a list-based mode (never cross-wire Instagram ↔ Nyx). */
+export function defaultPromptListIdForMode(mode?: string | null): string {
+  if (mode === DATASET_MODE_NYX_LATEX_FETISH) return NYX_PROMPT_LIST_ID;
+  return DEFAULT_PROMPT_LIST_ID; // instagram-ugc
+}
+
 /**
- * Resolve Instagram UGC prompts from data/dataset-prompt-lists/instagram-ugc.json
+ * Resolve list prompts from data/dataset-prompt-lists/<id>.json
  * (editable) or an optional per-run custom list. Do not hardcode long prompts here.
  */
 export function resolveInstagramPrompts(
   projectRoot = projectRootFromHere,
-  options?: { promptListId?: string; customPrompts?: string[] }
+  options?: { promptListId?: string; customPrompts?: string[]; datasetMode?: string }
 ): string[] {
   if (options?.customPrompts?.length) {
     return options.customPrompts.map(item => item.trim()).filter(Boolean);
   }
-  const id = options?.promptListId || DEFAULT_PROMPT_LIST_ID;
+  // Mode wins: Nyx mode always uses the Nyx list unless a non-default custom id is intentional.
+  // Never fall back to Instagram when mode is Nyx (or vice versa via default).
+  let id = options?.promptListId || defaultPromptListIdForMode(options?.datasetMode);
+  if (options?.datasetMode === DATASET_MODE_NYX_LATEX_FETISH) {
+    id = options.promptListId && options.promptListId !== DEFAULT_PROMPT_LIST_ID
+      ? options.promptListId
+      : NYX_PROMPT_LIST_ID;
+  } else if (options?.datasetMode === DATASET_MODE_INSTAGRAM_UGC) {
+    id = options.promptListId && options.promptListId !== NYX_PROMPT_LIST_ID
+      ? options.promptListId
+      : DEFAULT_PROMPT_LIST_ID;
+  }
   const list = loadPromptListSafe(projectRoot, id);
   if (!list?.prompts?.length) {
     throw new Error(
-      `Instagram UGC prompt list "${id}" is missing or empty. ` +
+      `Prompt list "${id}" is missing or empty. ` +
         `Edit data/dataset-prompt-lists/${id}.json or use Dataset Builder → Edit prompt list.`
     );
   }
@@ -156,8 +189,13 @@ export const datasetSchema = z.object({
   model: z.string().min(1).max(260).refine(value => !path.isAbsolute(value) && !value.includes("..")),
   basePrompt: z.string().trim().min(2).max(1800),
   count: z.number().int().min(12).max(40).default(40),
-  width: z.number().int().min(384).max(1024).multipleOf(64).default(512),
-  height: z.number().int().min(384).max(1024).multipleOf(64).default(768),
+  /**
+   * Output canvas size. Default stays 512×768 for fast LoRA datasets.
+   * Optional hi-res matches Photo (e.g. 1530×2048 Portrait 3:4, max 2048).
+   * Not forced to multiples of 64 — same rules as generationSchema / Photo mode.
+   */
+  width: z.number().int().min(256).max(2048).default(512),
+  height: z.number().int().min(256).max(2048).default(768),
   /**
    * Base seed for this dataset run.
    * - Image N uses Comfy seed = base + N
@@ -173,10 +211,14 @@ export const datasetSchema = z.object({
   captionStrategy: z.enum(["identity-focused", "flexible-character", "outfit-concept", "style", "custom"]).default("flexible-character"),
   /**
    * standard = directed pose/angle matrix (default Dataset Builder).
-   * instagram-ugc = editable prompt list (data/dataset-prompt-lists/) for LoRA training.
+   * instagram-ugc = Instagram lifestyle shot list (its own JSON collection).
+   * nyx-latex-fetish = Nyx NSFW latex fetish shot list (separate collection; X-safe / no anti-nudity default).
    */
-  datasetMode: z.enum(["standard", "instagram-ugc"]).default("standard"),
-  /** Which JSON list under data/dataset-prompt-lists/ to use in instagram-ugc mode. */
+  datasetMode: z.enum(["standard", "instagram-ugc", "nyx-latex-fetish"]).default("standard"),
+  /**
+   * Which JSON under data/dataset-prompt-lists/ for list modes.
+   * Instagram mode → instagram-ugc; Nyx mode → nyx-latex-fetish (server coerces if mismatched).
+   */
   promptListId: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/i).default(DEFAULT_PROMPT_LIST_ID),
   /**
    * sequential = prompts[0], prompts[1], … in list order (default).
@@ -233,16 +275,26 @@ export const DEFAULT_INSTAGRAM_UGC_NEGATIVE = [
   "bikini only, wardrobe malfunction, clothing pulled down, missing clothes"
 ].join(", ");
 
+/**
+ * Nyx latex fetish / X NSFW negative: identity + quality only.
+ * Intentionally does NOT ban nudity, latex, or intimate framing (X / adult content OK).
+ */
+export const DEFAULT_NYX_LATEX_FETISH_NEGATIVE = [
+  "different person, changed identity, male, group photo, crowd",
+  "deformed face, malformed hands, extra limbs, fused fingers, blurry face",
+  "watermark, text overlay, logo, low resolution, cartoon, anime, 3d render"
+].join(", ");
+
 /** Resolve negative for a dataset mode; custom non-empty string wins. */
 export function resolveDatasetNegativePrompt(
-  datasetMode: "standard" | "instagram-ugc" | string | undefined,
+  datasetMode: DatasetModeId | string | undefined,
   custom?: string | null
 ): string {
   const trimmed = String(custom ?? "").trim();
   if (trimmed) return trimmed.slice(0, 2500);
-  return datasetMode === "instagram-ugc"
-    ? DEFAULT_INSTAGRAM_UGC_NEGATIVE
-    : DEFAULT_STANDARD_DATASET_NEGATIVE;
+  if (datasetMode === DATASET_MODE_NYX_LATEX_FETISH) return DEFAULT_NYX_LATEX_FETISH_NEGATIVE;
+  if (datasetMode === DATASET_MODE_INSTAGRAM_UGC) return DEFAULT_INSTAGRAM_UGC_NEGATIVE;
+  return DEFAULT_STANDARD_DATASET_NEGATIVE;
 }
 
 /**
@@ -287,36 +339,52 @@ function usesDefault(values: string[], defaults: readonly string[]) {
   return values.length === defaults.length && values.every((value, index) => value === defaults[index]);
 }
 
-function instagramShotTags(shot: string, listIndex: number, cycle: number, order: string) {
+function listShotTags(
+  shot: string,
+  listIndex: number,
+  cycle: number,
+  order: string,
+  datasetMode: string
+) {
   const lower = shot.toLowerCase();
-  const framing = lower.includes("close-up")
+  const framing = lower.includes("close-up") || lower.includes("lips")
     ? "close-up headshot"
     : lower.includes("medium shot")
       ? "waist-up medium shot"
-      : lower.includes("full-body")
+      : lower.includes("full-body") || lower.includes("full body") || lower.includes("smother") || lower.includes("kneeling") || lower.includes("standing")
         ? "full-body view"
         : "lifestyle shot";
   const angle = lower.includes("side profile") || lower.includes("sideways")
     ? "profile"
     : lower.includes("over shoulder") || lower.includes("looking back")
       ? "three-quarter over-shoulder"
-      : lower.includes("mirror")
-        ? "mirror selfie front"
-        : "eye-level front";
+      : lower.includes("low angle") || lower.includes("looking up")
+        ? "low angle"
+        : lower.includes("mirror")
+          ? "mirror selfie front"
+          : "eye-level front";
   const scene = lower.includes("bedroom") || lower.includes("bed")
     ? "bedroom"
-    : lower.includes("window")
-      ? "window-side interior"
-      : lower.includes("wall") || lower.includes("floor")
-        ? "indoor lifestyle"
-        : "casual indoor lifestyle";
-  const lighting = lower.includes("side light") || lower.includes("window")
-    ? "soft window side light"
-    : "soft natural indoor light";
+    : lower.includes("creator room") || lower.includes("luxury")
+      ? "creator room"
+      : lower.includes("window")
+        ? "window-side interior"
+        : lower.includes("wall") || lower.includes("floor")
+          ? "indoor lifestyle"
+          : "casual indoor lifestyle";
+  const lighting = lower.includes("pink") || lower.includes("magenta") || lower.includes("crimson") || lower.includes("goth")
+    ? "moody colored light"
+    : lower.includes("side light") || lower.includes("window")
+      ? "soft window side light"
+      : "soft natural indoor light";
+  const expression =
+    datasetMode === DATASET_MODE_NYX_LATEX_FETISH
+      ? "dominant teasing expression"
+      : "instagram lifestyle expression";
   return {
     angle,
     framing,
-    expression: "instagram lifestyle expression",
+    expression,
     /** Short pose key for uniqueness checks — full shot lives in tags.shot */
     pose: `list#${listIndex}`,
     shot,
@@ -324,7 +392,7 @@ function instagramShotTags(shot: string, listIndex: number, cycle: number, order
     lighting,
     outfit: "outfit as described in shot",
     background: scene,
-    mode: "instagram-ugc",
+    mode: datasetMode,
     order,
     cycle: String(cycle),
     shotIndex: String(listIndex)
@@ -356,13 +424,13 @@ export function composeCharacterFeatureBlock(input: DatasetInput): string {
  *
  * Master image is only an identity lock (Krea Identity / structural ref) — NOT a prompt source.
  * High ref_boost (e.g. 1.15) copies the master's pose, outfit, and framing and fights the shot list.
- * Instagram UGC defaults lower so list prompts (outfit/pose/camera) can win.
+ * List modes (Instagram / Nyx) default lower so list prompts (pose/outfit/camera) can win.
  */
 export function datasetIdentityReferenceStrength(
   architecture: string,
-  datasetMode: "standard" | "instagram-ugc" = "standard"
+  datasetMode: DatasetModeId | string = "standard"
 ): number {
-  if (datasetMode === "instagram-ugc") {
+  if (isPromptListDatasetMode(datasetMode)) {
     return architecture === "krea2" ? 0.72 : architecture === "illustrious" ? 0.55 : 0.55;
   }
   return architecture === "krea2" ? 0.85 : architecture === "illustrious" ? 0.65 : 0.65;
@@ -375,14 +443,13 @@ export function datasetIdentityReferenceStrength(
  */
 export function resolveMasterIdentityStrength(
   architecture: string,
-  datasetMode: "standard" | "instagram-ugc" | string = "standard",
+  datasetMode: DatasetModeId | string = "standard",
   custom?: number | null
 ): number {
-  const mode = datasetMode === "instagram-ugc" ? "instagram-ugc" : "standard";
   if (custom !== undefined && custom !== null && Number.isFinite(Number(custom))) {
     return Math.min(2, Math.max(0, Number(custom)));
   }
-  return datasetIdentityReferenceStrength(architecture, mode);
+  return datasetIdentityReferenceStrength(architecture, datasetMode);
 }
 
 /**
@@ -430,29 +497,39 @@ export function composeInstagramDatasetCaption(options: {
 }
 
 /**
- * Instagram UGC mode: one list prompt per image + character features half.
+ * List-based modes (Instagram UGC, Nyx latex fetish): one list prompt per image + character half.
  * sequential = list order; shuffle = unique permuted order each full cycle.
+ * Any list length wraps (slot % length) so 10-prompt sets work with 12/24/40 counts.
  */
-function instagramUgcPrompts(input: DatasetInput) {
+function listBasedDatasetPrompts(input: DatasetInput) {
+  const mode = String(input.datasetMode || DATASET_MODE_INSTAGRAM_UGC);
   const root = input.projectRoot || projectRootFromHere;
   const shots = resolveInstagramPrompts(root, {
     promptListId: input.promptListId,
-    customPrompts: input.customPrompts
+    customPrompts: input.customPrompts,
+    datasetMode: mode
   });
   const listLen = shots.length;
   const characterFeatures = composeCharacterFeatureBlock(input);
   const order = input.promptOrder || "sequential";
-  const cycleNotes = [
-    "",
-    "alternate Instagram pass with mirrored body orientation and slightly different camera height",
-    "third Instagram pass with changed hand placement and gaze while keeping the same outfit concept"
-  ];
+  const cycleNotes =
+    mode === DATASET_MODE_NYX_LATEX_FETISH
+      ? [
+          "",
+          "alternate latex pass with mirrored body orientation and slightly different camera height",
+          "third latex pass with changed hand placement and gaze while keeping the same latex look"
+        ]
+      : [
+          "",
+          "alternate Instagram pass with mirrored body orientation and slightly different camera height",
+          "third Instagram pass with changed hand placement and gaze while keeping the same outfit concept"
+        ];
 
   return Array.from({ length: input.count }, (_, index) => {
     const slot = input.variationOffset + index;
     const { listIndex, cycle, positionInCycle } = promptIndexForSlot(slot, listLen, order, input.seed);
     const shot = shots[listIndex];
-    const tags = instagramShotTags(shot, listIndex, cycle, order);
+    const tags = listShotTags(shot, listIndex, cycle, order, mode);
     const cycleDirective = cycleNotes[Math.min(cycle, cycleNotes.length - 1)];
     const composed = composeInstagramDatasetCaption({
       listPrompt: shot,
@@ -480,7 +557,7 @@ function instagramUgcPrompts(input: DatasetInput) {
 }
 
 export function datasetPrompts(input: DatasetInput) {
-  if (input.datasetMode === "instagram-ugc") return instagramUgcPrompts(input);
+  if (isPromptListDatasetMode(input.datasetMode)) return listBasedDatasetPrompts(input);
 
   const matrix = input.promptMatrix;
   const adjustmentText = characterAdjustmentText(input);

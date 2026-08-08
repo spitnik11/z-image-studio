@@ -9,7 +9,13 @@ import {
   savePromptList,
   shuffledIndices
 } from "./dataset-prompt-lists.js";
-import { datasetPrompts, datasetSchema } from "./dataset.js";
+import {
+  datasetPrompts,
+  datasetSchema,
+  resolveDatasetNegativePrompt,
+  DEFAULT_NYX_LATEX_FETISH_NEGATIVE,
+  DEFAULT_INSTAGRAM_UGC_NEGATIVE
+} from "./dataset.js";
 
 const temps: string[] = [];
 afterEach(() => {
@@ -34,6 +40,23 @@ describe("dataset prompt lists", () => {
     expect(list.prompts[39]).toMatch(/dolphin shorts/i);
     expect(list.prompts[39]).toMatch(/gaming setup|streamer room/i);
     expect(list.prompts[39]).toMatch(/mischievous smirk/i);
+  });
+
+  it("loads the on-disk Nyx latex fetish list with 10 preserved prompts", () => {
+    const projectRoot = path.resolve(process.cwd(), "..");
+    const list = loadPromptList(projectRoot, "nyx-latex-fetish");
+    expect(list.id).toBe("nyx-latex-fetish");
+    expect(list.prompts.length).toBe(10);
+    expect(list.prompts[0]).toMatch(/Photorealistic extreme close-up of Nyx/i);
+    expect(list.prompts[0]).toMatch(/full black latex hood/i);
+    expect(list.prompts[0]).toMatch(/vividly red lips/i);
+    expect(list.prompts[1]).toMatch(/smothering pose/i);
+    expect(list.prompts[4]).toMatch(/sitting fully on the viewer's face|sitting fully on the viewer/i);
+    expect(list.prompts[8]).toMatch(/slight hip tilt/i);
+    expect(list.prompts[9]).toMatch(/smothering threat pose/i);
+    expect(list.prompts.every(p => p.trim().length >= 8)).toBe(true);
+    // Must not share Instagram UGC content
+    expect(list.prompts.some(p => /lili doe|dolphin shorts|streamer room/i.test(p))).toBe(false);
   });
 
   it("replaces prompts via save path for manual updates", () => {
@@ -64,6 +87,33 @@ describe("dataset prompt lists", () => {
       seen.add(listIndex);
     }
     expect(seen.size).toBe(40);
+  });
+
+  it("wraps short lists (e.g. 10 prompts) so slots past the end restart at 0", () => {
+    const listLength = 10;
+    // First full cycle
+    for (let slot = 0; slot < listLength; slot++) {
+      const { listIndex, cycle } = promptIndexForSlot(slot, listLength, "sequential", 1);
+      expect(listIndex).toBe(slot);
+      expect(cycle).toBe(0);
+    }
+    // Second cycle restarts
+    for (let slot = listLength; slot < listLength * 2; slot++) {
+      const { listIndex, cycle } = promptIndexForSlot(slot, listLength, "sequential", 1);
+      expect(listIndex).toBe(slot % listLength);
+      expect(cycle).toBe(1);
+    }
+    // 12-image build over 10 prompts: indices 0..9,0,1
+    const twelve = Array.from({ length: 12 }, (_, slot) => promptIndexForSlot(slot, listLength, "sequential", 7).listIndex);
+    expect(twelve).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1]);
+    // 24 and 40 wrap cleanly without going out of range
+    for (const count of [12, 24, 40]) {
+      const indices = Array.from({ length: count }, (_, slot) => promptIndexForSlot(slot, listLength, "sequential", 3).listIndex);
+      expect(indices.every(i => i >= 0 && i < listLength)).toBe(true);
+      expect(indices[0]).toBe(0);
+      expect(indices[listLength]).toBe(0);
+      expect(indices[listLength - 1]).toBe(listLength - 1);
+    }
   });
 
   it("shuffle mode is deterministic and unique within a cycle", () => {
@@ -130,6 +180,58 @@ describe("dataset prompt lists", () => {
     const sequential = datasetPrompts({ ...input, promptOrder: "sequential" });
     expect(prompts.map(p => p.listIndex)).not.toEqual(sequential.map(p => p.listIndex));
   });
+
+  it("Nyx first-class mode uses its own list, wraps, and keeps Instagram separate", () => {
+    const projectRoot = path.resolve(process.cwd(), "..");
+    const base = datasetSchema.parse({
+      name: "Nyx Wrap",
+      trigger: "nyx",
+      model: "krea2.safetensors",
+      basePrompt: "same adult woman latex identity",
+      count: 12,
+      width: 1530,
+      height: 2048,
+      seed: 99,
+      datasetMode: "nyx-latex-fetish",
+      promptOrder: "sequential",
+      // Even if IG id is sent, Nyx mode must coerce to Nyx list
+      promptListId: "instagram-ugc",
+      projectRoot
+    });
+    expect(base.datasetMode).toBe("nyx-latex-fetish");
+    expect(base.width).toBe(1530);
+    expect(base.height).toBe(2048);
+    const twelve = datasetPrompts(base);
+    expect(twelve).toHaveLength(12);
+    expect(twelve.map(p => p.listIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1]);
+    expect(twelve[0].caption).toMatch(/Nyx/i);
+    expect(twelve[0].caption).toMatch(/red lips|latex/i);
+    expect(twelve[0].caption).not.toMatch(/lili doe|dolphin shorts/i);
+    expect((twelve[0].tags as Record<string, string>).mode).toBe("nyx-latex-fetish");
+    expect(twelve[10].listIndex).toBe(0);
+    expect(twelve[10].caption).toContain("alternate latex pass");
+    expect(twelve[10].caption).not.toContain("Instagram pass");
+    // NSFW negative does not ban nudity; Instagram still does
+    expect(DEFAULT_NYX_LATEX_FETISH_NEGATIVE).not.toMatch(/\bnude\b/i);
+    expect(DEFAULT_INSTAGRAM_UGC_NEGATIVE).toMatch(/\bnude\b/i);
+    expect(resolveDatasetNegativePrompt("nyx-latex-fetish")).toBe(DEFAULT_NYX_LATEX_FETISH_NEGATIVE);
+    expect(resolveDatasetNegativePrompt("instagram-ugc")).toBe(DEFAULT_INSTAGRAM_UGC_NEGATIVE);
+    // Default size still validates
+    const def = datasetSchema.parse({ ...base, width: 512, height: 768, count: 24, promptListId: "nyx-latex-fetish" });
+    expect(def.width).toBe(512);
+    const twentyFour = datasetPrompts(def);
+    expect(twentyFour).toHaveLength(24);
+    expect(twentyFour.map(p => p.listIndex)).toEqual([
+      ...Array.from({ length: 10 }, (_, i) => i),
+      ...Array.from({ length: 10 }, (_, i) => i),
+      ...Array.from({ length: 4 }, (_, i) => i)
+    ]);
+    const forty = datasetPrompts({ ...def, count: 40 });
+    expect(forty).toHaveLength(40);
+    expect(forty.every(p => p.listIndex >= 0 && p.listIndex < 10)).toBe(true);
+    expect(forty[39].listIndex).toBe(9);
+  });
+
 
   it("different seeds produce different shuffle orders and different image noise seeds", () => {
     const projectRoot = path.resolve(process.cwd(), "..");
