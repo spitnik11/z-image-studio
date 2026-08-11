@@ -51,7 +51,7 @@ import { getDatasetModeEntry, listKnownDatasetModes } from "./dataset-mode-catal
 import { analyzeReview, exportReviewedDataset, loadReview, removeReviewItem, saveReview, updateReviewItem } from "./dataset-review.js";
 import { buildModelManifest, detectReferenceCapabilities, detectUpscaleCatalog } from "./diagnostics.js";
 import { adapterForModel, modelAdapters } from "./model-adapters.js";
-import { applyLoraActivations, LoraRegistry, type LoraRecord } from "./lora-registry.js";
+import { applyLoraActivations, inferLoraArchitecture, LoraRegistry, readSafetensorsMetadata, type LoraRecord } from "./lora-registry.js";
 import { CharacterProfileStore } from "./character-profiles.js";
 import { parseTrainingProgress, trainingTelemetry } from "./training-telemetry.js";
 import {
@@ -466,16 +466,22 @@ app.post("/api/library/upload", (q, r) => {
         });
         installLibraryFile(file.path, target.finalPath);
         if (target.kind === "lora") {
-          // Seed unverified only — user confirms architecture/activations in LoraRegistryManager.
+          // Seed from safetensors metadata when possible (modular with lora-install path).
           const existing = loraRegistry.list().find(item => item.filename.toLowerCase() === target.filename.toLowerCase());
           if (!existing) {
+            const meta = readSafetensorsMetadata(target.finalPath);
+            const architecture = inferLoraArchitecture(meta, target.filename);
             loraRegistry.upsert({
               filename: target.filename,
-              architecture: modelArchitecture(target.filename),
-              verified: false,
+              architecture,
+              verified: architecture !== "unknown",
+              verifiedAdapters: architecture !== "unknown" && architecture !== "pony" ? [architecture] : [],
               activationWords: [],
+              recommendedStrength: 0.7,
               createdAt: new Date().toISOString(),
-              notes: "Uploaded via Studio library drop. Classify and verify before generation use."
+              notes: architecture === "unknown"
+                ? "Uploaded via Studio library drop. Classify and verify architecture before generation use."
+                : `Uploaded via Studio library drop. Architecture inferred as ${architecture} from metadata/filename.`
             });
           }
         }

@@ -80,13 +80,35 @@ export function readSafetensorsMetadata(file: string): Record<string, unknown> {
   } catch { return {}; }
 }
 
-function inferArchitecture(metadata: Record<string, unknown>, filename = ""): LoraArchitecture {
+/**
+ * Classify LoRA architecture from embedded safetensors metadata first, then filename.
+ * Accepts common spellings: krea2, krea_2, "krea 2".
+ * Never invent architecture from vague product marketing alone.
+ */
+export function inferLoraArchitecture(metadata: Record<string, unknown> = {}, filename = ""): LoraArchitecture {
   const text = `${filename} ${JSON.stringify(metadata)}`.toLowerCase();
-  if (text.includes("krea2") || text.includes("krea_2")) return "krea2";
-  if (text.includes("z-image") || text.includes("z_image") || text.includes("zimage")) return "z-image";
+  if (
+    text.includes("krea2")
+    || text.includes("krea_2")
+    || text.includes("krea 2")
+    || /["']architecture["']\s*:\s*["']krea/.test(text)
+    || text.includes("krea-2-raw")
+    || text.includes("krea/krea")
+  ) {
+    return "krea2";
+  }
+  if (text.includes("z-image") || text.includes("z_image") || text.includes("zimage") || text.includes("z-image turbo")) {
+    return "z-image";
+  }
   if (text.includes("anima")) return "anima";
   if (text.includes("illustrious") || text.includes("noobai") || text.includes("ixl")) return "illustrious";
+  if (text.includes("pony") || text.includes("ponydiffusion")) return "pony";
   return "unknown";
+}
+
+/** @deprecated Prefer inferLoraArchitecture */
+function inferArchitecture(metadata: Record<string, unknown>, filename = ""): LoraArchitecture {
+  return inferLoraArchitecture(metadata, filename);
 }
 
 export class LoraRegistry {
