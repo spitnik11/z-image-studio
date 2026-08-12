@@ -473,14 +473,15 @@ textarea {
   line-height: 1.5;
   margin: 5px 0 0;
 }
+/* 3×2 grid fits six modular presets (incl. QHD 16:9) without cramping labels. */
 .ratios {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 7px;
 }
 .ratios button {
   font-size: 9px;
-  padding: 9px 3px 7px;
+  padding: 9px 4px 7px;
   border: 1px solid #30342e;
   background: #1a1d19;
   border-radius: 7px;
@@ -488,12 +489,21 @@ textarea {
   place-items: center;
   gap: 6px;
   color: #8f958b;
+  line-height: 1.2;
+  text-align: center;
 }
 .ratios button i {
   height: 18px;
-  max-width: 25px;
+  max-width: 28px;
   border: 1px solid currentColor;
   background: #242821;
+}
+.canvas-size-hint {
+  display: block;
+  margin-top: 8px;
+  font-size: 9px;
+  line-height: 1.45;
+  color: #6f756c;
 }
 .ratios button.active {
   border-color: #9ebd3f;

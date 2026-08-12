@@ -233,11 +233,12 @@ export const datasetSchema = z.object({
   count: z.number().int().min(12).max(40).default(40),
   /**
    * Output canvas size. Default stays 512×768 for fast LoRA datasets.
-   * Optional hi-res matches Photo (e.g. 1530×2048 Portrait 3:4, max 2048).
+   * Optional hi-res matches Photo (e.g. 1530×2048, 2560×1440 QHD).
    * Not forced to multiples of 64 — same rules as generationSchema / Photo mode.
+   * Default remains 512×768 for fast LoRA datasets.
    */
-  width: z.number().int().min(256).max(2048).default(512),
-  height: z.number().int().min(256).max(2048).default(768),
+  width: z.number().int().min(256).max(2560).default(512),
+  height: z.number().int().min(256).max(2560).default(768),
   /**
    * Base seed for this dataset run.
    * - Image N uses Comfy seed = base + N

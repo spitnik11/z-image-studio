@@ -39,7 +39,8 @@ type ModeCatalogEntry = {
 /** Dataset canvas presets. Default remains 512×768; hi-res is opt-in. */
 const DATASET_SIZE_PRESETS = [
   { id: "default", label: "512 × 768 · default (fast LoRA)", width: 512, height: 768 },
-  { id: "portrait-3-4", label: "1530 × 2048 · Portrait 3:4 (hi-res)", width: 1530, height: 2048 }
+  { id: "portrait-3-4", label: "1530 × 2048 · Portrait 3:4 (hi-res)", width: 1530, height: 2048 },
+  { id: "qhd-16-9", label: "2560 × 1440 · QHD 16:9 (hi-res)", width: 2560, height: 1440 }
 ] as const;
 const IG_LIST_ID = "instagram-ugc";
 

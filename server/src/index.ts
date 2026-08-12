@@ -126,9 +126,10 @@ const defaultSettings = {
     outputFormat: "png" as const, sampler: "res_multistep" as const, scheduler: "simple" as const
   }
 };
+// Canvas min/max shared with generationSchema (canvas-size.ts) — QHD 2560×1440 allowed.
 const generationDefaultsSchema = z.object({
-  width: z.number().int().min(256).max(2048),
-  height: z.number().int().min(256).max(2048),
+  width: z.number().int().min(256).max(2560),
+  height: z.number().int().min(256).max(2560),
   steps: z.number().int().min(1).max(60),
   guidance: z.number().min(0).max(10),
   batchSize: z.number().int().min(1).max(4),

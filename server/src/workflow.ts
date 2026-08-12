@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { CANVAS_MAX_EDGE, CANVAS_MIN_EDGE } from "./canvas-size.js";
 
 export const generationSchema = z.object({
   prompt: z.string().trim().min(1).max(4000),
   negativePrompt: z.string().trim().max(2000).default(""),
-  width: z.number().int().min(256).max(2048),
-  height: z.number().int().min(256).max(2048),
+  width: z.number().int().min(CANVAS_MIN_EDGE).max(CANVAS_MAX_EDGE),
+  height: z.number().int().min(CANVAS_MIN_EDGE).max(CANVAS_MAX_EDGE),
   seed: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   steps: z.number().int().min(1).max(60).default(8),
   guidance: z.number().min(0).max(10).default(1),
