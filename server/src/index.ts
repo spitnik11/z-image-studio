@@ -48,6 +48,7 @@ import {
   savePromptList
 } from "./dataset-prompt-lists.js";
 import { getDatasetModeEntry, listKnownDatasetModes } from "./dataset-mode-catalog.js";
+import { CANVAS_MAX_EDGE, CANVAS_MIN_EDGE } from "./canvas-size.js";
 import { analyzeReview, exportReviewedDataset, loadReview, removeReviewItem, saveReview, updateReviewItem } from "./dataset-review.js";
 import { buildModelManifest, detectReferenceCapabilities, detectUpscaleCatalog } from "./diagnostics.js";
 import { adapterForModel, modelAdapters } from "./model-adapters.js";
@@ -126,10 +127,10 @@ const defaultSettings = {
     outputFormat: "png" as const, sampler: "res_multistep" as const, scheduler: "simple" as const
   }
 };
-// Canvas min/max shared with generationSchema (canvas-size.ts) — QHD 2560×1440 allowed.
+// Canvas min/max MUST use canvas-size constants (avoid stale hardcoded 2048).
 const generationDefaultsSchema = z.object({
-  width: z.number().int().min(256).max(2560),
-  height: z.number().int().min(256).max(2560),
+  width: z.number().int().min(CANVAS_MIN_EDGE).max(CANVAS_MAX_EDGE),
+  height: z.number().int().min(CANVAS_MIN_EDGE).max(CANVAS_MAX_EDGE),
   steps: z.number().int().min(1).max(60),
   guidance: z.number().min(0).max(10),
   batchSize: z.number().int().min(1).max(4),
