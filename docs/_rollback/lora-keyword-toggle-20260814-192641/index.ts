@@ -1417,14 +1417,7 @@ app.post("/api/generate", photoUpload.array("references", 4), async (q, r) => {
       return !record?.verified || record.architecture !== requiredLoraFamily;
     });
     if (incompatibleLora) throw new Error(`LoRA is not verified for this ${requiredLoraFamily} model: ${incompatibleLora.name}`);
-    // Optional keyword injection only — LoRA list still loads into the graph either way.
-    // Default true preserves previous behavior when the field is omitted (older clients / scripts).
-    const insertLoraKeywords = q.body.insertLoraKeywords === undefined
-      ? true
-      : q.body.insertLoraKeywords === "true" || q.body.insertLoraKeywords === true;
-    if (insertLoraKeywords) {
-      input.prompt = applyLoraActivations(input.prompt, input.loras, registeredLoras);
-    }
+    input.prompt = applyLoraActivations(input.prompt, input.loras, registeredLoras);
     if ((architecture === "illustrious" || architecture === "anima") && q.body.consistentCharacter === "true") {
       throw new Error(`Character Consistency is not available for ${architecture === "anima" ? "Anima" : "Illustrious"} yet. Use Pose + Direct/Face references instead.`);
     }
