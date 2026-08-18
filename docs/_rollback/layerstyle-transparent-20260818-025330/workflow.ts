@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { CANVAS_MAX_EDGE, CANVAS_MIN_EDGE } from "./canvas-size.js";
-import { applyTransparentAssetPostProcess } from "./layerstyle-postprocess.js";
 
 export const generationSchema = z.object({
   prompt: z.string().trim().min(1).max(4000),
@@ -22,11 +21,6 @@ export const generationSchema = z.object({
   upscaleModel: z.string().max(260).refine(v => !path.isAbsolute(v) && !v.includes(".."), "Invalid upscale model").default("RealESRGAN_x4plus.pth"),
   /** Opt-in Impact Pack face detect + low-denoise polish after decode (all Photo architectures). */
   faceRefinement: z.boolean().default(false),
-  /**
-   * Opt-in LayerStyle RmBgUltra V2 after exact canvas → RGBA PNG cutout for assets/logos.
-   * Default false: Photo graphs stay identical to the pre-LayerStyle finish path.
-   */
-  transparentAsset: z.boolean().default(false),
   /**
    * NovelAI-style Improve / classic img2img source (Comfy input-relative path, e.g. z-image-studio/foo.png).
    * When set with img2imgStrength &lt; 1, latent comes from VAEEncode instead of EmptyLatentImage.
@@ -751,9 +745,6 @@ export function buildAnimaWorkflow(raw: unknown): ApiWorkflow {
   } else if (p.neuralUpscale) {
     addNeuralUpscale(workflow, ["9", 0], p.upscaleModel);
   }
-  if (p.transparentAsset) {
-    applyTransparentAssetPostProcess(workflow, { image: ["11", 0] });
-  }
   return workflow;
 }
 
@@ -944,9 +935,6 @@ export function buildIllustriousWorkflow(raw: unknown): ApiWorkflow {
     });
   } else if (p.neuralUpscale) {
     addNeuralUpscale(workflow, ["9", 0], p.upscaleModel);
-  }
-  if (p.transparentAsset) {
-    applyTransparentAssetPostProcess(workflow, { image: ["11", 0] });
   }
   return workflow;
 }
@@ -1162,9 +1150,6 @@ export function buildWorkflow(template: ApiWorkflow, raw: unknown): ApiWorkflow 
     });
   } else if (p.neuralUpscale) {
     addNeuralUpscale(w, ["9", 0], p.upscaleModel);
-  }
-  if (p.transparentAsset) {
-    applyTransparentAssetPostProcess(w, { image: ["11", 0] });
   }
   return w;
 }

@@ -51,7 +51,6 @@ import { getDatasetModeEntry, listKnownDatasetModes } from "./dataset-mode-catal
 import { CANVAS_MAX_EDGE, CANVAS_MIN_EDGE } from "./canvas-size.js";
 import { analyzeReview, exportReviewedDataset, loadReview, removeReviewItem, saveReview, updateReviewItem } from "./dataset-review.js";
 import { buildModelManifest, detectReferenceCapabilities, detectUpscaleCatalog } from "./diagnostics.js";
-import { LAYERSTYLE_TRANSPARENT_NODES } from "./layerstyle-postprocess.js";
 import { adapterForModel, modelAdapters } from "./model-adapters.js";
 import { applyLoraActivations, inferLoraArchitecture, LoraRegistry, readSafetensorsMetadata, type LoraRecord } from "./lora-registry.js";
 import { CharacterProfileStore } from "./character-profiles.js";
@@ -1373,7 +1372,6 @@ app.post("/api/generate", photoUpload.array("references", 4), async (q, r) => {
       steps: Number(q.body.steps), guidance: Number(q.body.guidance), batchSize: Number(q.body.batchSize),
       neuralUpscale: q.body.neuralUpscale === "true",
       faceRefinement: q.body.faceRefinement === "true",
-      transparentAsset: q.body.transparentAsset === "true",
       upscaleModel: String(q.body.upscaleModel || "RealESRGAN_x4plus.pth"),
       initImage,
       img2imgStrength,
@@ -1505,15 +1503,6 @@ app.post("/api/generate", photoUpload.array("references", 4), async (q, r) => {
       const upscaleModels: string[] = Array.isArray(upscaleInput?.[1]?.options)
         ? upscaleInput[1].options : (Array.isArray(upscaleInput?.[0]) ? upscaleInput[0] : []);
       if (!upscaleModels.includes(input.upscaleModel)) throw new Error(`Neural upscale model is missing: ${input.upscaleModel}`);
-    }
-    // Opt-in LayerStyle cutout — only enforced when the user enables Transparent PNG asset.
-    if (input.transparentAsset) {
-      for (const node of LAYERSTYLE_TRANSPARENT_NODES) {
-        if (!(node in info)) {
-          throw new Error(`Transparent PNG asset is unavailable because ${node} is missing. Run scripts/install-layerstyle.ps1 and restart ComfyUI.`);
-        }
-      }
-      input.outputFormat = "png";
     }
     const clientId = crypto.randomUUID();
     const started = Date.now();

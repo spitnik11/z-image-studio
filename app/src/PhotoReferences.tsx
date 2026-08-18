@@ -10,7 +10,7 @@ export type PhotoReference = {
   strength: number;
 };
 export type ReferenceCapability = {
-  id: "identity" | "face" | "pose" | "depth" | "structure" | "face-refinement" | "upscale";
+  id: "identity" | "face" | "pose" | "depth" | "structure" | "face-refinement" | "upscale" | "transparent-asset";
   available: boolean;
   provider?: string;
   message: string;
