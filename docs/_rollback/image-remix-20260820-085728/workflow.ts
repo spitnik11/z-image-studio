@@ -4,16 +4,8 @@ import { z } from "zod";
 import { CANVAS_MAX_EDGE, CANVAS_MIN_EDGE } from "./canvas-size.js";
 import { applyTransparentAssetPostProcess } from "./layerstyle-postprocess.js";
 
-/** Neutral conditioning used when Remix/img2img runs with an empty user prompt. */
-export const REMIX_NEUTRAL_PROMPT = "masterpiece, best quality, highly detailed";
-
 export const generationSchema = z.object({
-  /**
-   * Text prompt. Required for pure txt2img.
-   * May be empty when initImage is set and img2imgStrength &lt; 1 (Remix / Improve) —
-   * callers should run resolveGenerationPrompt() before building graphs.
-   */
-  prompt: z.string().trim().max(4000).default(""),
+  prompt: z.string().trim().min(1).max(4000),
   negativePrompt: z.string().trim().max(2000).default(""),
   width: z.number().int().min(CANVAS_MIN_EDGE).max(CANVAS_MAX_EDGE),
   height: z.number().int().min(CANVAS_MIN_EDGE).max(CANVAS_MAX_EDGE),
@@ -77,33 +69,9 @@ export const generationSchema = z.object({
       path: ["initImage"]
     });
   }
-  const isImageRemix = Boolean(value.initImage) && value.img2imgStrength < 1;
-  if (!isImageRemix && !value.prompt) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "Prompt is required for text-to-image. For image remix, set a base image and Strength below 1.",
-      path: ["prompt"]
-    });
-  }
 });
 
 export type Generation = z.infer<typeof generationSchema>;
-
-/** True when this generation is image-conditioned remix/improve (not pure txt2img). */
-export function isImageRemixGeneration(input: Pick<Generation, "initImage" | "img2imgStrength">): boolean {
-  return Boolean(input.initImage) && input.img2imgStrength < 1;
-}
-
-/**
- * Ensure Comfy always receives a non-empty positive prompt.
- * Empty user prompt on remix → neutral placeholder (NovelAI-style image-led i2i).
- */
-export function resolveGenerationPrompt(input: Pick<Generation, "prompt" | "initImage" | "img2imgStrength">): string {
-  const trimmed = (input.prompt || "").trim();
-  if (trimmed) return trimmed;
-  if (isImageRemixGeneration(input)) return REMIX_NEUTRAL_PROMPT;
-  return trimmed;
-}
 
 /**
  * NovelAI Strength + Noise → KSampler denoise.

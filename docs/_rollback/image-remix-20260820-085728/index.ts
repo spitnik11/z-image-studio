@@ -23,7 +23,6 @@ import {
   KREA_REFERENCE_FILES,
   modelArchitecture,
   POSE_FILES,
-  resolveGenerationPrompt,
   safeOutputPath,
   saveMetadata,
   type ApiWorkflow
@@ -1346,52 +1345,6 @@ app.post("/api/style-maintain/from-gallery", (q, r) => {
   }
 });
 
-/**
- * Prepare a Remix / img2img base image in Comfy input.
- * Accepts either a gallery output (JSON) or an uploaded image file.
- * Returns fields suitable for sourceFilename/sourceSubfolder/sourceType=input on /api/generate.
- */
-app.post("/api/remix/prepare", photoUpload.single("image"), (q, r) => {
-  try {
-    fs.mkdirSync(uploadRoot, { recursive: true });
-    const file = (q as { file?: { filename: string; originalname?: string } }).file;
-    if (file) {
-      r.json({
-        filename: file.filename,
-        subfolder: "",
-        type: "input",
-        image: `z-image-studio/${file.filename}`,
-        label: file.originalname || file.filename
-      });
-      return;
-    }
-    const sourceName = String(q.body?.filename || q.body?.sourceFilename || "");
-    const sourceSub = String(q.body?.subfolder || q.body?.sourceSubfolder || "");
-    const sourceType = String(q.body?.type || q.body?.sourceType || "output");
-    if (!sourceName) throw new Error("Upload an image or pass a gallery filename.");
-    if (sourceType === "input" && sourceName && !sourceName.includes("..")) {
-      const candidate = path.join(uploadRoot, sourceName);
-      if (!fs.existsSync(candidate)) throw new Error("Remix source was not found in the upload folder.");
-      r.json({ filename: sourceName, subfolder: "", type: "input", image: `z-image-studio/${sourceName}`, label: sourceName });
-      return;
-    }
-    const source = safeOutputPath(settings.outputDirectory, sourceName, sourceSub);
-    if (!fs.existsSync(source)) throw new Error("Gallery image was not found in the ComfyUI output folder.");
-    const safeBase = sourceName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "remix.png";
-    const destName = `remix-${Date.now()}-${safeBase}`;
-    fs.copyFileSync(source, path.join(uploadRoot, destName));
-    r.json({
-      filename: destName,
-      subfolder: "",
-      type: "input",
-      image: `z-image-studio/${destName}`,
-      label: sourceName
-    });
-  } catch (e) {
-    r.status(400).json({ error: simplify(e) });
-  }
-});
-
 app.post("/api/generate", photoUpload.array("references", 4), async (q, r) => {
   const freshFiles = (q.files as Express.Multer.File[] | undefined) || [];
   try {
@@ -1416,23 +1369,14 @@ app.post("/api/generate", photoUpload.array("references", 4), async (q, r) => {
     if (!initImage && q.body.sourceFilename) {
       const sourceName = String(q.body.sourceFilename);
       const sourceSub = String(q.body.sourceSubfolder || "");
-      const sourceType = String(q.body.sourceType || "output");
+      const source = safeOutputPath(settings.outputDirectory, sourceName, sourceSub);
+      if (!fs.existsSync(source)) throw new Error("Improve source image was not found in the ComfyUI output folder.");
       fs.mkdirSync(uploadRoot, { recursive: true });
-      if (sourceType === "input") {
-        // Already staged under ComfyUI/input/z-image-studio (Remix prepare / upload).
-        const safeName = path.basename(sourceName);
-        const staged = path.join(uploadRoot, safeName);
-        if (!fs.existsSync(staged)) throw new Error("Remix / Improve source image was not found in the upload folder.");
-        initImage = `z-image-studio/${safeName}`;
-      } else {
-        const source = safeOutputPath(settings.outputDirectory, sourceName, sourceSub);
-        if (!fs.existsSync(source)) throw new Error("Improve source image was not found in the ComfyUI output folder.");
-        const safeBase = sourceName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "source.png";
-        const destName = `improve-${Date.now()}-${safeBase}`;
-        const dest = path.join(uploadRoot, destName);
-        fs.copyFileSync(source, dest);
-        initImage = `z-image-studio/${destName}`;
-      }
+      const safeBase = sourceName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "source.png";
+      const destName = `improve-${Date.now()}-${safeBase}`;
+      const dest = path.join(uploadRoot, destName);
+      fs.copyFileSync(source, dest);
+      initImage = `z-image-studio/${destName}`;
     }
 
     const img2imgStrength = q.body.img2imgStrength !== undefined && q.body.img2imgStrength !== ""
@@ -1467,14 +1411,12 @@ app.post("/api/generate", photoUpload.array("references", 4), async (q, r) => {
         .map(({ characterId: _characterId, ...reference }: { image: string; mode: "pose" | "direct" | "face"; strength: number; characterId?: string }) => reference)
     }));
     const composed = composeCharacterPrompts(input.prompt, input.negativePrompt, characters);
-    /** User-facing prompt (may be empty on Remix); graph always gets resolveGenerationPrompt(). */
     const basePrompt = input.prompt;
     const baseNegativePrompt = input.negativePrompt;
     if (characters.length) {
       input.prompt = composed.positive;
       input.negativePrompt = composed.negative;
     }
-    input.prompt = resolveGenerationPrompt(input);
     for (const file of freshFiles) await validateUploadedMedia(file);
     const info: any = await comfy().objectInfo();
     const availableModels: string[] = architecture === "illustrious"
