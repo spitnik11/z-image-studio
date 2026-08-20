@@ -102,7 +102,18 @@ export function inferLoraArchitecture(metadata: Record<string, unknown> = {}, fi
   }
   if (text.includes("anima")) return "anima";
   if (text.includes("illustrious") || text.includes("noobai") || text.includes("ixl")) return "illustrious";
-  if (text.includes("pony") || text.includes("ponydiffusion")) return "pony";
+  // Pony / SDXL LoRAs (e.g. ArsMJStylePony pixel art) — registry may use "pony" or
+  // "illustrious"; install path can force expectArchitecture when stacking on SDXL graph.
+  if (text.includes("pony") || text.includes("ponydiffusion") || text.includes("arsmjstylepony")) return "pony";
+  if (
+    text.includes("stable-diffusion-xl")
+    || text.includes("sdxl_base")
+    || text.includes("sdxl-base")
+    || text.includes("/lora") && text.includes("sdxl")
+  ) {
+    // SDXL LoRAs without Pony tags still load on Illustrious/SDXL checkpoint graph.
+    return "illustrious";
+  }
   return "unknown";
 }
 

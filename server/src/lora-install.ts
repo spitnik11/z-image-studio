@@ -101,7 +101,11 @@ export function buildLoraRecordFromFile(
   if (sizeBytes <= 0) throw new Error("LoRA file is empty.");
   const sha256 = hashFileSha256(filePath);
   const metadata = readSafetensorsMetadata(filePath);
-  let architecture = inferLoraArchitecture(metadata, filename);
+  // Explicit --expect / expectArchitecture wins so installers can pin the Studio graph family
+  // (e.g. SDXL pixel LoRA → illustrious) when metadata is ambiguous or mis-tagged.
+  let architecture = options.expectArchitecture && options.expectArchitecture !== "unknown"
+    ? options.expectArchitecture
+    : inferLoraArchitecture(metadata, filename);
   if (architecture === "unknown" && options.expectArchitecture) {
     architecture = options.expectArchitecture;
   }
