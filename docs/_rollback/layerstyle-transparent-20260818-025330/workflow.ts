@@ -2,18 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { CANVAS_MAX_EDGE, CANVAS_MIN_EDGE } from "./canvas-size.js";
-import { applyTransparentAssetPostProcess } from "./layerstyle-postprocess.js";
-
-/** Neutral conditioning used when Remix/img2img runs with an empty user prompt. */
-export const REMIX_NEUTRAL_PROMPT = "masterpiece, best quality, highly detailed";
 
 export const generationSchema = z.object({
-  /**
-   * Text prompt. Required for pure txt2img.
-   * May be empty when initImage is set and img2imgStrength &lt; 1 (Remix / Improve) —
-   * callers should run resolveGenerationPrompt() before building graphs.
-   */
-  prompt: z.string().trim().max(4000).default(""),
+  prompt: z.string().trim().min(1).max(4000),
   negativePrompt: z.string().trim().max(2000).default(""),
   width: z.number().int().min(CANVAS_MIN_EDGE).max(CANVAS_MAX_EDGE),
   height: z.number().int().min(CANVAS_MIN_EDGE).max(CANVAS_MAX_EDGE),
@@ -30,11 +21,6 @@ export const generationSchema = z.object({
   upscaleModel: z.string().max(260).refine(v => !path.isAbsolute(v) && !v.includes(".."), "Invalid upscale model").default("RealESRGAN_x4plus.pth"),
   /** Opt-in Impact Pack face detect + low-denoise polish after decode (all Photo architectures). */
   faceRefinement: z.boolean().default(false),
-  /**
-   * Opt-in LayerStyle RmBgUltra V2 after exact canvas → RGBA PNG cutout for assets/logos.
-   * Default false: Photo graphs stay identical to the pre-LayerStyle finish path.
-   */
-  transparentAsset: z.boolean().default(false),
   /**
    * NovelAI-style Improve / classic img2img source (Comfy input-relative path, e.g. z-image-studio/foo.png).
    * When set with img2imgStrength &lt; 1, latent comes from VAEEncode instead of EmptyLatentImage.
@@ -77,33 +63,9 @@ export const generationSchema = z.object({
       path: ["initImage"]
     });
   }
-  const isImageRemix = Boolean(value.initImage) && value.img2imgStrength < 1;
-  if (!isImageRemix && !value.prompt) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "Prompt is required for text-to-image. For image remix, set a base image and Strength below 1.",
-      path: ["prompt"]
-    });
-  }
 });
 
 export type Generation = z.infer<typeof generationSchema>;
-
-/** True when this generation is image-conditioned remix/improve (not pure txt2img). */
-export function isImageRemixGeneration(input: Pick<Generation, "initImage" | "img2imgStrength">): boolean {
-  return Boolean(input.initImage) && input.img2imgStrength < 1;
-}
-
-/**
- * Ensure Comfy always receives a non-empty positive prompt.
- * Empty user prompt on remix → neutral placeholder (NovelAI-style image-led i2i).
- */
-export function resolveGenerationPrompt(input: Pick<Generation, "prompt" | "initImage" | "img2imgStrength">): string {
-  const trimmed = (input.prompt || "").trim();
-  if (trimmed) return trimmed;
-  if (isImageRemixGeneration(input)) return REMIX_NEUTRAL_PROMPT;
-  return trimmed;
-}
 
 /**
  * NovelAI Strength + Noise → KSampler denoise.
@@ -783,9 +745,6 @@ export function buildAnimaWorkflow(raw: unknown): ApiWorkflow {
   } else if (p.neuralUpscale) {
     addNeuralUpscale(workflow, ["9", 0], p.upscaleModel);
   }
-  if (p.transparentAsset) {
-    applyTransparentAssetPostProcess(workflow, { image: ["11", 0] });
-  }
   return workflow;
 }
 
@@ -976,9 +935,6 @@ export function buildIllustriousWorkflow(raw: unknown): ApiWorkflow {
     });
   } else if (p.neuralUpscale) {
     addNeuralUpscale(workflow, ["9", 0], p.upscaleModel);
-  }
-  if (p.transparentAsset) {
-    applyTransparentAssetPostProcess(workflow, { image: ["11", 0] });
   }
   return workflow;
 }
@@ -1194,9 +1150,6 @@ export function buildWorkflow(template: ApiWorkflow, raw: unknown): ApiWorkflow 
     });
   } else if (p.neuralUpscale) {
     addNeuralUpscale(w, ["9", 0], p.upscaleModel);
-  }
-  if (p.transparentAsset) {
-    applyTransparentAssetPostProcess(w, { image: ["11", 0] });
   }
   return w;
 }

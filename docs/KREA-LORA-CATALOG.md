@@ -11,6 +11,7 @@ release for Krea 2, not that Z-Image Studio has completed a visual quality bench
 | Social/UGC style | FameGrid Krea 2 Standard v1 | `3154245` / `Famegrid Standard Krea 2.safetensors` | `famegrid`, first in prompt | 0.8 |
 | Character/style | Alt Girl Krea | local / `AltGirlKrea.safetensors` | `AltGirl` | 0.7 |
 | Body | PAWG Krea 2 | local / `pawg_krea2.safetensors` | None confirmed; describe proportions | 0.7 |
+| Body | Flat Chested Krea 2 v3 | local / `Krea 2 - Flat Chested v3.safetensors` | None in file; describe chest proportions | 0.7 |
 | Style/realism | BloomGirls UltraRealism | `3075850` / `bloomgirls-ultrarealism-krea2_4k.safetensors` | None | 0.7 |
 | Realism | Krea2 Realism V2 | `3090634` / `Krea2-realism-V2.safetensors` | None | 1.0 |
 | Character concept | Cutifyier | `3107521` / `cutifier_krea2.safetensors` | None required; creator also mentions `ukgirl` only for the older Z-Image release | 0.75 |

@@ -11,9 +11,8 @@ import {
   POSE_NODES
 } from "./workflow.js";
 import { listUpscaleCatalog, parseInstalledUpscaleModels } from "./upscale-catalog.js";
-import { LAYERSTYLE_TRANSPARENT_NODES } from "./layerstyle-postprocess.js";
 
-export type ReferenceCapability = "identity" | "face" | "pose" | "depth" | "structure" | "face-refinement" | "upscale" | "transparent-asset";
+export type ReferenceCapability = "identity" | "face" | "pose" | "depth" | "structure" | "face-refinement" | "upscale";
 export type Architecture = "z-image" | "krea2" | "illustrious" | "anima";
 
 export type CapabilityStatus = {
@@ -86,14 +85,6 @@ export function detectReferenceCapabilities(info: any): Record<Architecture, Cap
     "Available with the local YOLO face detector.", "Face polish stays disabled until Impact Pack and its face detector are available.");
   const upscale = result("upscale", "ComfyUI neural upscale", upscaleMissing,
     "A local neural upscale model is available.", "Neural upscale is unavailable. Canvas resizing still uses core Lanczos scaling.");
-  const transparentMissing = missingNodes(info, LAYERSTYLE_TRANSPARENT_NODES);
-  const transparent = result(
-    "transparent-asset",
-    "ComfyUI LayerStyle RmBgUltra V2",
-    transparentMissing,
-    "Transparent PNG cutout is available after generation (opt-in).",
-    "Transparent PNG asset stays disabled until ComfyUI_LayerStyle is installed (scripts/install-layerstyle.ps1) and ComfyUI is restarted."
-  );
 
   return {
     "z-image": [
@@ -107,8 +98,7 @@ export function detectReferenceCapabilities(info: any): Record<Architecture, Cap
       result("structure", "Canny + Z-Image ControlNet", [...zStructureNodes, ...zControl],
         "Structural reference guidance is available.", "Structure mode stays disabled until the native Z-Image ControlNet nodes and model are available."),
       face,
-      upscale,
-      transparent
+      upscale
     ],
     krea2: [
       result("identity", "Krea 2 Identity Edit v1.2", [...kIdentityNodes, ...kIdentity],
@@ -122,8 +112,7 @@ export function detectReferenceCapabilities(info: any): Record<Architecture, Cap
         "Native Krea 2 depth conditioning is available.", "Depth conditioning stays disabled until Depth Anything and the Krea 2 depth adapter are available."),
       { id: "structure", available: false, missing: ["Krea 2 structural adapter"], message: "Krea 2 uses Identity Edit or Depth guidance; the Z-Image Canny ControlNet is incompatible.", provider: "Krea 2 native adapters" },
       face,
-      upscale,
-      transparent
+      upscale
     ],
     illustrious: [
       { id: "identity", available: false, missing: ["Illustrious IP-Adapter"], provider: "Illustrious XL", message: "True identity IP-Adapter is not installed for Illustrious. Use Face/Structure (Canny) plus a character LoRA for likeness." },
@@ -138,8 +127,7 @@ export function detectReferenceCapabilities(info: any): Record<Architecture, Cap
         "Structural / Direct silhouette guidance via SDXL Canny ControlNet.",
         "Structure mode needs SDXL Canny ControlNet weights."),
       face,
-      upscale,
-      transparent
+      upscale
     ],
     anima: [
       { id: "identity", available: false, missing: ["Anima identity adapter"], provider: "Anima LLLite", message: "Anima has no IP-Adapter path here. Use Structure/Face (lineart LLLite) plus a character LoRA." },
@@ -154,8 +142,7 @@ export function detectReferenceCapabilities(info: any): Record<Architecture, Cap
         "Structural / Direct guidance via Canny + Anima lineart LLLite.",
         "Structure mode needs anima-lllite-lineart patch."),
       face,
-      upscale,
-      transparent
+      upscale
     ]
   };
 }

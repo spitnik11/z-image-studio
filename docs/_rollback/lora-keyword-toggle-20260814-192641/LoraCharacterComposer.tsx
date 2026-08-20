@@ -21,12 +21,10 @@ export type LoraCatalogRecord = {
 
 const categoryOrder = ["character", "body", "realism", "style", "action", "concept", "utility", "other"];
 
-export function LoraCharacterComposer({ records, stack, architecture, insertKeywords = true, onAdd }: {
+export function LoraCharacterComposer({ records, stack, architecture, onAdd }: {
   records: LoraCatalogRecord[];
   stack: LoraStackItem[];
   architecture: "krea2" | "illustrious";
-  /** Mirrors the Photo LoRA stack toggle; does not change which LoRAs are applied. */
-  insertKeywords?: boolean;
   onAdd: (record: LoraCatalogRecord) => void;
 }) {
   const [category, setCategory] = useState("all");
@@ -39,13 +37,13 @@ export function LoraCharacterComposer({ records, stack, architecture, insertKeyw
     .filter((word, index, words) => words.findIndex(item => item.toLowerCase() === word.toLowerCase()) === index);
 
   return <details className="lora-character-composer">
-    <summary><span><Sparkles/> LoRA recipe composer</span><small>{architecture === "illustrious" ? "Illustrious" : "Krea"} catalog · {insertKeywords ? "keywords on" : "keywords off"}</small></summary>
-    <p className="composer-intro">Combine verified character, body, realism, style, action, and utility adapters. {insertKeywords ? "Required activation words are added to the prompt when enabled above." : "Keyword auto-insert is off — LoRAs still apply by weight only."}</p>
+    <summary><span><Sparkles/> LoRA recipe composer</span><small>{architecture === "illustrious" ? "Illustrious" : "Krea"} catalog · automatic keywords</small></summary>
+    <p className="composer-intro">Combine verified character, body, realism, style, action, and utility adapters. Required activation words are added to the submitted prompt automatically.</p>
     <div className="composer-filters" role="group" aria-label="LoRA category">
       <button className={category === "all" ? "active" : ""} onClick={() => setCategory("all")}>All</button>
       {categories.map(item => <button key={item} className={category === item ? "active" : ""} onClick={() => setCategory(item)}>{item}</button>)}
     </div>
-    {activeWords.length > 0 && <div className="activation-preview"><strong>{insertKeywords ? "Prompt activations" : "Known activations (not auto-inserted)"}</strong><div>{activeWords.map(word => <span key={word}>{word}</span>)}</div></div>}
+    {activeWords.length > 0 && <div className="activation-preview"><strong>Prompt activations</strong><div>{activeWords.map(word => <span key={word}>{word}</span>)}</div></div>}
     <div className="composer-catalog">
       {visible.map(record => {
         const selected = stack.some(item => item.name === record.name);

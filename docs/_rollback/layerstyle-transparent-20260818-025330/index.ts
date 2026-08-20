@@ -23,7 +23,6 @@ import {
   KREA_REFERENCE_FILES,
   modelArchitecture,
   POSE_FILES,
-  resolveGenerationPrompt,
   safeOutputPath,
   saveMetadata,
   type ApiWorkflow
@@ -52,17 +51,6 @@ import { getDatasetModeEntry, listKnownDatasetModes } from "./dataset-mode-catal
 import { CANVAS_MAX_EDGE, CANVAS_MIN_EDGE } from "./canvas-size.js";
 import { analyzeReview, exportReviewedDataset, loadReview, removeReviewItem, saveReview, updateReviewItem } from "./dataset-review.js";
 import { buildModelManifest, detectReferenceCapabilities, detectUpscaleCatalog } from "./diagnostics.js";
-import { LAYERSTYLE_TRANSPARENT_NODES } from "./layerstyle-postprocess.js";
-import {
-  buildPoseExtractWorkflow,
-  buildPromptExtractWorkflow,
-  detectExtractCapabilities,
-  firstHistoryImage,
-  preferredFlorenceVersion,
-  readSavedExtractText,
-  waitForComfyHistory,
-  type PromptExtractMode
-} from "./image-extract.js";
 import { adapterForModel, modelAdapters } from "./model-adapters.js";
 import { applyLoraActivations, inferLoraArchitecture, LoraRegistry, readSafetensorsMetadata, type LoraRecord } from "./lora-registry.js";
 import { CharacterProfileStore } from "./character-profiles.js";
@@ -1335,165 +1323,6 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
 });
 app.get("/api/gallery", (_q, r) => r.json(records));
 app.delete("/api/gallery/:id", (q, r) => { records = records.filter(x => x.id !== q.params.id); persist(); r.status(204).end(); });
-/** Copy a gallery output into Comfy input for Style Maintain Look (avoids browser blob fetch of large PNGs). */
-app.post("/api/style-maintain/from-gallery", (q, r) => {
-  try {
-    const sourceName = String(q.body?.filename || q.body?.sourceFilename || "");
-    const sourceSub = String(q.body?.subfolder || q.body?.sourceSubfolder || "");
-    const sourceType = String(q.body?.type || q.body?.sourceType || "output");
-    if (!sourceName) throw new Error("filename is required");
-    if (sourceType !== "output") throw new Error("Style Maintain Look currently supports gallery output images only.");
-    const source = safeOutputPath(settings.outputDirectory, sourceName, sourceSub);
-    if (!fs.existsSync(source)) throw new Error("Gallery image was not found in the ComfyUI output folder.");
-    fs.mkdirSync(uploadRoot, { recursive: true });
-    const safeBase = sourceName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "look.png";
-    const destName = `style-maintain-${Date.now()}-${safeBase}`;
-    const dest = path.join(uploadRoot, destName);
-    fs.copyFileSync(source, dest);
-    r.json({ image: `z-image-studio/${destName}`, filename: destName });
-  } catch (e) {
-    r.status(400).json({ error: simplify(e) });
-  }
-});
-
-/**
- * Prepare a Remix / img2img base image in Comfy input.
- * Accepts either a gallery output (JSON) or an uploaded image file.
- * Returns fields suitable for sourceFilename/sourceSubfolder/sourceType=input on /api/generate.
- */
-app.post("/api/remix/prepare", photoUpload.single("image"), (q, r) => {
-  try {
-    fs.mkdirSync(uploadRoot, { recursive: true });
-    const file = (q as { file?: { filename: string; originalname?: string } }).file;
-    if (file) {
-      r.json({
-        filename: file.filename,
-        subfolder: "",
-        type: "input",
-        image: `z-image-studio/${file.filename}`,
-        label: file.originalname || file.filename
-      });
-      return;
-    }
-    const sourceName = String(q.body?.filename || q.body?.sourceFilename || "");
-    const sourceSub = String(q.body?.subfolder || q.body?.sourceSubfolder || "");
-    const sourceType = String(q.body?.type || q.body?.sourceType || "output");
-    if (!sourceName) throw new Error("Upload an image or pass a gallery filename.");
-    if (sourceType === "input" && sourceName && !sourceName.includes("..")) {
-      const candidate = path.join(uploadRoot, sourceName);
-      if (!fs.existsSync(candidate)) throw new Error("Remix source was not found in the upload folder.");
-      r.json({ filename: sourceName, subfolder: "", type: "input", image: `z-image-studio/${sourceName}`, label: sourceName });
-      return;
-    }
-    const source = safeOutputPath(settings.outputDirectory, sourceName, sourceSub);
-    if (!fs.existsSync(source)) throw new Error("Gallery image was not found in the ComfyUI output folder.");
-    const safeBase = sourceName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "remix.png";
-    const destName = `remix-${Date.now()}-${safeBase}`;
-    fs.copyFileSync(source, path.join(uploadRoot, destName));
-    r.json({
-      filename: destName,
-      subfolder: "",
-      type: "input",
-      image: `z-image-studio/${destName}`,
-      label: sourceName
-    });
-  } catch (e) {
-    r.status(400).json({ error: simplify(e) });
-  }
-});
-
-app.get("/api/extract/capabilities", async (_q, r) => {
-  try {
-    const info: any = await comfy().objectInfo();
-    r.json(detectExtractCapabilities(info));
-  } catch (e) {
-    r.status(502).json({ error: simplify(e) });
-  }
-});
-
-async function resolveExtractSourceImage(q: any): Promise<string> {
-  const file = (q as { file?: { filename: string } }).file;
-  if (file?.filename) return `z-image-studio/${file.filename}`;
-  const sourceName = String(q.body?.filename || q.body?.sourceFilename || q.body?.image || "");
-  const sourceSub = String(q.body?.subfolder || q.body?.sourceSubfolder || "");
-  const sourceType = String(q.body?.type || q.body?.sourceType || "output");
-  if (!sourceName) throw new Error("Upload an image or pass a gallery/input filename.");
-  if (sourceType === "input") {
-    const safeName = path.basename(sourceName);
-    const staged = path.join(uploadRoot, safeName);
-    if (!fs.existsSync(staged)) throw new Error("Extract source was not found in the upload folder.");
-    return `z-image-studio/${safeName}`;
-  }
-  const source = safeOutputPath(settings.outputDirectory, sourceName, sourceSub);
-  if (!fs.existsSync(source)) throw new Error("Gallery image was not found in the ComfyUI output folder.");
-  fs.mkdirSync(uploadRoot, { recursive: true });
-  const safeBase = sourceName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "extract.png";
-  const destName = `extract-src-${Date.now()}-${safeBase}`;
-  fs.copyFileSync(source, path.join(uploadRoot, destName));
-  return `z-image-studio/${destName}`;
-}
-
-app.post("/api/extract/pose", photoUpload.single("image"), async (q, r) => {
-  try {
-    const info: any = await comfy().objectInfo();
-    const caps = detectExtractCapabilities(info);
-    if (!caps.pose) {
-      throw new Error(`Pose extract unavailable. Missing nodes: ${caps.missingPose.join(", ")}`);
-    }
-    const imagePath = await resolveExtractSourceImage(q);
-    const prefix = `extract-pose-${Date.now()}`;
-    const graph = buildPoseExtractWorkflow(imagePath, prefix);
-    const clientId = crypto.randomUUID();
-    const result = (await comfy().submit(graph, clientId, "next", 60_000)) as { prompt_id: string };
-    const history = await waitForComfyHistory(comfy(), result.prompt_id, 180_000);
-    const image = firstHistoryImage(history);
-    if (!image?.filename) throw new Error("Pose extract completed without an output image.");
-    const source = safeOutputPath(settings.outputDirectory, image.filename, image.subfolder || "");
-    if (!fs.existsSync(source)) throw new Error("Pose stick figure file was not found on disk.");
-    fs.mkdirSync(uploadRoot, { recursive: true });
-    const destName = `pose-${Date.now()}-${path.basename(image.filename)}`;
-    fs.copyFileSync(source, path.join(uploadRoot, destName));
-    r.json({
-      image: `z-image-studio/${destName}`,
-      filename: destName,
-      subfolder: "",
-      type: "input",
-      previewUrl: `/api/image?${new URLSearchParams({ filename: destName, subfolder: "", type: "input" })}`
-    });
-  } catch (e) {
-    r.status(400).json({ error: simplify(e) });
-  }
-});
-
-app.post("/api/extract/prompt", photoUpload.single("image"), async (q, r) => {
-  try {
-    const info: any = await comfy().objectInfo();
-    const caps = detectExtractCapabilities(info);
-    if (!caps.prompt) {
-      throw new Error(
-        `Prompt extract unavailable. Missing nodes: ${caps.missingPrompt.join(", ")}. LayerStyle Advance Florence2 is required.`
-      );
-    }
-    const mode = (String(q.body?.mode || "caption") === "tags" ? "tags" : "caption") as PromptExtractMode;
-    const florenceVersion = preferredFlorenceVersion(caps.florenceVersions);
-    const imagePath = await resolveExtractSourceImage(q);
-    const prefix = `extract-prompt-${Date.now()}`;
-    const graph = buildPromptExtractWorkflow(imagePath, mode, florenceVersion, prefix);
-    const clientId = crypto.randomUUID();
-    const result = (await comfy().submit(graph, clientId, "next", 60_000)) as { prompt_id: string };
-    const history = await waitForComfyHistory(comfy(), result.prompt_id, 300_000);
-    const promptText = readSavedExtractText(settings.outputDirectory, history);
-    if (!promptText) {
-      throw new Error(
-        "Prompt extract finished but no text was returned. Florence PromptGen weights may still be downloading — retry once, or install Florence PromptGen under ComfyUI/models/florence2."
-      );
-    }
-    r.json({ prompt: promptText, mode, florenceVersion });
-  } catch (e) {
-    r.status(400).json({ error: simplify(e) });
-  }
-});
-
 app.post("/api/generate", photoUpload.array("references", 4), async (q, r) => {
   const freshFiles = (q.files as Express.Multer.File[] | undefined) || [];
   try {
@@ -1518,23 +1347,14 @@ app.post("/api/generate", photoUpload.array("references", 4), async (q, r) => {
     if (!initImage && q.body.sourceFilename) {
       const sourceName = String(q.body.sourceFilename);
       const sourceSub = String(q.body.sourceSubfolder || "");
-      const sourceType = String(q.body.sourceType || "output");
+      const source = safeOutputPath(settings.outputDirectory, sourceName, sourceSub);
+      if (!fs.existsSync(source)) throw new Error("Improve source image was not found in the ComfyUI output folder.");
       fs.mkdirSync(uploadRoot, { recursive: true });
-      if (sourceType === "input") {
-        // Already staged under ComfyUI/input/z-image-studio (Remix prepare / upload).
-        const safeName = path.basename(sourceName);
-        const staged = path.join(uploadRoot, safeName);
-        if (!fs.existsSync(staged)) throw new Error("Remix / Improve source image was not found in the upload folder.");
-        initImage = `z-image-studio/${safeName}`;
-      } else {
-        const source = safeOutputPath(settings.outputDirectory, sourceName, sourceSub);
-        if (!fs.existsSync(source)) throw new Error("Improve source image was not found in the ComfyUI output folder.");
-        const safeBase = sourceName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "source.png";
-        const destName = `improve-${Date.now()}-${safeBase}`;
-        const dest = path.join(uploadRoot, destName);
-        fs.copyFileSync(source, dest);
-        initImage = `z-image-studio/${destName}`;
-      }
+      const safeBase = sourceName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "source.png";
+      const destName = `improve-${Date.now()}-${safeBase}`;
+      const dest = path.join(uploadRoot, destName);
+      fs.copyFileSync(source, dest);
+      initImage = `z-image-studio/${destName}`;
     }
 
     const img2imgStrength = q.body.img2imgStrength !== undefined && q.body.img2imgStrength !== ""
@@ -1552,7 +1372,6 @@ app.post("/api/generate", photoUpload.array("references", 4), async (q, r) => {
       steps: Number(q.body.steps), guidance: Number(q.body.guidance), batchSize: Number(q.body.batchSize),
       neuralUpscale: q.body.neuralUpscale === "true",
       faceRefinement: q.body.faceRefinement === "true",
-      transparentAsset: q.body.transparentAsset === "true",
       upscaleModel: String(q.body.upscaleModel || "RealESRGAN_x4plus.pth"),
       initImage,
       img2imgStrength,
@@ -1569,14 +1388,12 @@ app.post("/api/generate", photoUpload.array("references", 4), async (q, r) => {
         .map(({ characterId: _characterId, ...reference }: { image: string; mode: "pose" | "direct" | "face"; strength: number; characterId?: string }) => reference)
     }));
     const composed = composeCharacterPrompts(input.prompt, input.negativePrompt, characters);
-    /** User-facing prompt (may be empty on Remix); graph always gets resolveGenerationPrompt(). */
     const basePrompt = input.prompt;
     const baseNegativePrompt = input.negativePrompt;
     if (characters.length) {
       input.prompt = composed.positive;
       input.negativePrompt = composed.negative;
     }
-    input.prompt = resolveGenerationPrompt(input);
     for (const file of freshFiles) await validateUploadedMedia(file);
     const info: any = await comfy().objectInfo();
     const availableModels: string[] = architecture === "illustrious"
@@ -1686,15 +1503,6 @@ app.post("/api/generate", photoUpload.array("references", 4), async (q, r) => {
       const upscaleModels: string[] = Array.isArray(upscaleInput?.[1]?.options)
         ? upscaleInput[1].options : (Array.isArray(upscaleInput?.[0]) ? upscaleInput[0] : []);
       if (!upscaleModels.includes(input.upscaleModel)) throw new Error(`Neural upscale model is missing: ${input.upscaleModel}`);
-    }
-    // Opt-in LayerStyle cutout — only enforced when the user enables Transparent PNG asset.
-    if (input.transparentAsset) {
-      for (const node of LAYERSTYLE_TRANSPARENT_NODES) {
-        if (!(node in info)) {
-          throw new Error(`Transparent PNG asset is unavailable because ${node} is missing. Run scripts/install-layerstyle.ps1 and restart ComfyUI.`);
-        }
-      }
-      input.outputFormat = "png";
     }
     const clientId = crypto.randomUUID();
     const started = Date.now();
