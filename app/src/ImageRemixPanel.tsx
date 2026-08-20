@@ -1,5 +1,6 @@
 import React, { useRef } from "react";
 import { Shuffle, Upload, X } from "lucide-react";
+import { ImageExtractActions } from "./ImageExtractActions";
 
 export type RemixSource = {
   filename: string;
@@ -22,6 +23,8 @@ type Props = {
   promptEmpty: boolean;
   busy?: boolean;
   onPrepareError?: (message: string) => void;
+  onPoseExtracted?: (payload: { image: string; filename: string; type: string }) => void;
+  onPromptExtracted?: (prompt: string, mode: "caption" | "tags") => void;
 };
 
 export function ImageRemixPanel({
@@ -37,7 +40,9 @@ export function ImageRemixPanel({
   onLockStructure,
   promptEmpty,
   busy,
-  onPrepareError
+  onPrepareError,
+  onPoseExtracted,
+  onPromptExtracted
 }: Props) {
   const input = useRef<HTMLInputElement>(null);
 
@@ -157,6 +162,14 @@ export function ImageRemixPanel({
               Add a base image (upload or gallery <em>Remix</em>) before generating.
             </p>
           )}
+
+          <ImageExtractActions
+            source={source ? { filename: source.filename, subfolder: source.subfolder, type: source.type } : null}
+            busy={busy}
+            onNotice={onPrepareError}
+            onPoseExtracted={onPoseExtracted}
+            onPromptExtracted={onPromptExtracted}
+          />
         </>
       )}
     </section>

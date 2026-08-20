@@ -1,6 +1,7 @@
 import React, { useRef } from "react";
 import { PersonStanding, Upload, X } from "lucide-react";
 import type { PhotoReference, ReferenceCapability } from "./PhotoReferences";
+import { ImageExtractActions } from "./ImageExtractActions";
 import {
   recommendedStyleMaintainStrengths,
   styleMaintainGuidance,
@@ -25,6 +26,8 @@ type Props = {
   onLook: (next: PhotoReference | null) => void;
   onPose: (next: PhotoReference | null) => void;
   busy?: boolean;
+  onNotice?: (message: string) => void;
+  onPromptExtracted?: (prompt: string, mode: "caption" | "tags") => void;
 };
 
 function previewUrl(ref: PhotoReference | null): string {
@@ -52,7 +55,9 @@ export function StyleMaintainPanel({
   pose,
   onLook,
   onPose,
-  busy
+  busy,
+  onNotice,
+  onPromptExtracted
 }: Props) {
   const lookInput = useRef<HTMLInputElement>(null);
   const poseInput = useRef<HTMLInputElement>(null);
@@ -201,6 +206,23 @@ export function StyleMaintainPanel({
               )}
             </div>
           </div>
+
+          <ImageExtractActions
+            source={look?.image ? { filename: look.image.replace(/^z-image-studio\//, ""), type: "input" } : null}
+            busy={busy}
+            onNotice={onNotice}
+            onPoseExtracted={payload => {
+              const strengths = recommendedStyleMaintainStrengths(architecture);
+              onPose({
+                id: pose?.id || crypto.randomUUID(),
+                image: payload.image,
+                name: payload.filename,
+                mode: "pose",
+                strength: pose?.strength ?? strengths.pose
+              });
+            }}
+            onPromptExtracted={onPromptExtracted}
+          />
         </>
       )}
     </section>

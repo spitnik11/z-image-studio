@@ -5510,6 +5510,15 @@ button.reuse.improve{margin-left:0.35rem}
 .image-remix-hint{margin:8px 0 0;padding:8px 10px;border-radius:8px;border:1px solid rgba(120,180,255,.25);background:rgba(120,180,255,.06)}
 .image-remix-warn{margin:8px 0 0;color:#e8b4a0}
 
+.image-extract-actions{margin-top:12px;padding-top:10px;border-top:1px solid var(--line);display:grid;gap:8px}
+.image-extract-head{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.image-extract-head strong{font-size:.8rem}
+.image-extract-head small{color:var(--muted);font-size:10px}
+.image-extract-buttons{display:flex;flex-wrap:wrap;gap:6px}
+.image-extract-buttons button{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:#121612;font-size:.75rem}
+.image-extract-buttons button:disabled{opacity:.45;cursor:not-allowed}
+.image-extract-hint{color:var(--muted);font-size:10px;line-height:1.35}
+
 /* Instagram UGC dataset mode */
 .instagram-shot-preview{margin:0.5rem 0 0;padding-left:1.1rem;font-size:0.82rem;line-height:1.4;opacity:0.9}
 .instagram-shot-preview li{margin:0.25rem 0}
