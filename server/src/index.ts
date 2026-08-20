@@ -1324,6 +1324,27 @@ app.post("/api/datasets", photoUpload.single("master"), async (q, r) => {
 });
 app.get("/api/gallery", (_q, r) => r.json(records));
 app.delete("/api/gallery/:id", (q, r) => { records = records.filter(x => x.id !== q.params.id); persist(); r.status(204).end(); });
+/** Copy a gallery output into Comfy input for Style Maintain Look (avoids browser blob fetch of large PNGs). */
+app.post("/api/style-maintain/from-gallery", (q, r) => {
+  try {
+    const sourceName = String(q.body?.filename || q.body?.sourceFilename || "");
+    const sourceSub = String(q.body?.subfolder || q.body?.sourceSubfolder || "");
+    const sourceType = String(q.body?.type || q.body?.sourceType || "output");
+    if (!sourceName) throw new Error("filename is required");
+    if (sourceType !== "output") throw new Error("Style Maintain Look currently supports gallery output images only.");
+    const source = safeOutputPath(settings.outputDirectory, sourceName, sourceSub);
+    if (!fs.existsSync(source)) throw new Error("Gallery image was not found in the ComfyUI output folder.");
+    fs.mkdirSync(uploadRoot, { recursive: true });
+    const safeBase = sourceName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "look.png";
+    const destName = `style-maintain-${Date.now()}-${safeBase}`;
+    const dest = path.join(uploadRoot, destName);
+    fs.copyFileSync(source, dest);
+    r.json({ image: `z-image-studio/${destName}`, filename: destName });
+  } catch (e) {
+    r.status(400).json({ error: simplify(e) });
+  }
+});
+
 app.post("/api/generate", photoUpload.array("references", 4), async (q, r) => {
   const freshFiles = (q.files as Express.Multer.File[] | undefined) || [];
   try {

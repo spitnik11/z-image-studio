@@ -203,16 +203,11 @@ function App(){
   setStyleMaintainEnabled(true);setStyleMaintainPose(null);setCharacters([]);
   setConsistentCharacter(styleMaintainUsesCharacterConsistency(arch));setFaceRefinement(false);
   setForm(f=>({...f,outputName:(f.outputName||"z-image").replace(/-pose$/,"")+"-pose"}));
-  const url="/api/image?"+new URLSearchParams({filename:String(media.filename||""),subfolder:String(media.subfolder||""),type:String(media.type||"output")});
-  fetch(url).then(async res=>{
-    if(!res.ok) throw new Error(`Look image load failed (${res.status})`);
-    const blob=await res.blob();
-    if(!blob.size) throw new Error("Look image was empty");
-    const file=new File([blob],String(media.filename||"look.png"),{type:blob.type||"image/png"});
-    const look:PhotoReference={id:crypto.randomUUID(),file,name:String(media.filename||"look.png"),mode:"direct",strength:strengths.look};
+  api<{image:string;filename:string}>("/api/style-maintain/from-gallery",{method:"POST",body:JSON.stringify({filename:String(media.filename||""),subfolder:String(media.subfolder||""),type:String(media.type||"output")})}).then(payload=>{
+    const look:PhotoReference={id:crypto.randomUUID(),image:payload.image,name:payload.filename||String(media.filename||"look.png"),mode:"direct",strength:strengths.look};
     setStyleMaintainLook(look);setPhotoReferences([look]);
     setNotice("Style Maintain ready: look locked from this image. Upload an optional pose reference and rewrite the prompt for the new pose/camera, then Generate. (Not Improve — that preserves pose.)");
-  }).catch(err=>setNotice(err.message||"Could not load look image for Style Maintain"));
+  }).catch(err=>setNotice(err.message||"Could not prepare look image for Style Maintain"));
  }
  function improveSelected(r:RecordItem){if(r.mediaType==="video"||!r.images?.[0])return;reuse(r);const media=r.images[0];setImproveSource({filename:media.filename,subfolder:media.subfolder||"",type:media.type||"output",label:media.filename});setImg2imgMode("refine");setImg2imgLockStructure(true);setImg2imgStrength(0.25);setImg2imgNoise(0.05);setFaceRefinement(true);setForm(f=>({...f,outputName:(f.outputName||"z-image").replace(/-improve$/,"")+"-improve"}));setNotice("Refine ready: low denoise + structure lock + face polish. Keeps the original seed and pose. Press Run Improve when ready.");}
 
